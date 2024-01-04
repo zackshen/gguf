@@ -1,13 +1,41 @@
+/// This module provides functionality for decoding and working with GGUF files.
+///
+/// GGUF files are binary files that contain key-value metadata and tensors.
+/// The `GGUFContainer` struct represents a GGUF file container and provides methods for decoding and accessing the data.
+/// The `GGUFModel` struct represents the decoded GGUF data, including the key-value metadata and tensors.
+/// The `Tensor` struct represents a tensor in the GGUF file, including its name, kind, offset, size, and shape.
+/// The `ByteOrder` enum represents the byte order of the GGUF file (little endian or big endian).
+/// The `Version` enum represents the version of the GGUF file (v1, v2, or v3).
+/// The `MetadataValueType` enum represents the value type of the metadata in the GGUF file.
+/// The `GGMLType` enum represents the GGML type of a tensor in the GGUF file.
+///
+/// Example usage:
+/// ```
+/// use gguf::GGUFContainer;
+/// use std::fs::File;
+///
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let file = File::open("example.gguf")?;
+///     let container = GGUFContainer::new(gguf::ByteOrder::LE, Box::new(file));
+///     let model = container.decode()?;
+///
+///     println!("GGUF version: {}", model.get_version());
+///
+///     for tensor in model.get_tensors() {
+///         println!("Tensor name: {}", tensor.name);
+///         println!("Tensor kind: {}", tensor.kind);
+///         println!("Tensor shape: {:?}", tensor.shape);
+///     }
+///
+///     Ok(())
+/// }
+/// ```
 use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, HashMap},
-    fmt::Display,
-};
+use std::{borrow::Borrow, collections::BTreeMap, fmt::Display};
 
 /// Magic constant for `ggml` files (unversioned).
 pub const FILE_MAGIC_GGML: i32 = 0x67676d6c;
@@ -21,14 +49,15 @@ pub const FILE_MAGIC_GGLA: i32 = 0x67676C61;
 pub const FILE_MAGIC_GGUF_LE: i32 = 0x46554747;
 pub const FILE_MAGIC_GGUF_BE: i32 = 0x47475546;
 
-const VERSION_V1: i32 = 0x00000001;
-const VERSION_V2: i32 = 0x00000002;
-const VERSION_V3: i32 = 0x00000003;
+const GGUF_VERSION_V1: i32 = 0x00000001;
+const GGUF_VERSION_V2: i32 = 0x00000002;
+const GGUF_VERSION_V3: i32 = 0x00000003;
 
 const THOUSAND: u64 = 1000;
 const MILLION: u64 = 1_000_000;
 const BILLION: u64 = 1_000_000_000;
 
+/// Convert a number to a human-readable string.
 fn human_number(value: u64) -> String {
     match value {
         _ if value > BILLION => format!("{:.0}B", value as f64 / BILLION as f64),
@@ -38,7 +67,8 @@ fn human_number(value: u64) -> String {
     }
 }
 
-// gguf spec: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
+/// Convert a file type to a human-readable string.
+/// GGUF spec: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
 fn file_type(ft: u64) -> String {
     match ft {
         0 => "F32",
@@ -65,6 +95,7 @@ fn file_type(ft: u64) -> String {
     .to_string()
 }
 
+/// Byte order of the GGUF file.
 #[derive(Default, Debug, Clone)]
 pub enum ByteOrder {
     #[default]
@@ -72,6 +103,7 @@ pub enum ByteOrder {
     BE,
 }
 
+/// Version of the GGUF file.
 #[derive(Debug, Clone)]
 pub enum Version {
     V1(V1),
@@ -79,24 +111,28 @@ pub enum Version {
     V3(V3),
 }
 
+/// Version 1 of the GGUF file.
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct V1 {
     num_tensor: u32,
     num_kv: u32,
 }
 
+/// Version 2 of the GGUF file.
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct V2 {
     num_tensor: u64,
     num_kv: u64,
 }
 
+/// Version 3 of the GGUF file.
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct V3 {
     num_tensor: u64,
     num_kv: u64,
 }
 
+/// GGUF file container.
 pub struct GGUFContainer {
     bo: ByteOrder,
     version: Version,
@@ -104,6 +140,27 @@ pub struct GGUFContainer {
 }
 
 impl GGUFContainer {
+    /// Create a new `GGUFContainer` from a byte order and a reader.
+    /// The reader must implement the `std::io::Read` trait.
+    /// ```
+    /// use gguf::GGUFContainer;
+    /// use std::fs::File;
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let file = File::open("example.gguf")?;
+    ///     let container = GGUFContainer::new(gguf::ByteOrder::LE, Box::new(file));
+    ///     let model = container.decode()?;
+    ///
+    ///     println!("GGUF version: {}", model.get_version());
+    ///
+    ///     for tensor in model.get_tensors() {
+    ///         println!("Tensor name: {}", tensor.name);
+    ///         println!("Tensor kind: {}", tensor.kind);
+    ///         println!("Tensor shape: {:?}", tensor.shape);
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
     pub fn new(bo: ByteOrder, reader: Box<dyn std::io::Read>) -> Self {
         Self {
             bo,
@@ -112,6 +169,7 @@ impl GGUFContainer {
         }
     }
 
+    /// Get the version of the GGUF file.
     pub fn get_version(&self) -> String {
         match &self.version {
             Version::V1(_) => String::from("v1"),
@@ -120,6 +178,7 @@ impl GGUFContainer {
         }
     }
 
+    /// Decode the GGUF file and return a `GGUFModel`.
     pub fn decode(&mut self) -> Result<GGUFModel> {
         let version = match self.bo {
             ByteOrder::LE => self.reader.read_i32::<LittleEndian>().unwrap(),
@@ -129,7 +188,7 @@ impl GGUFContainer {
         debug!("version {}", version);
 
         match version {
-            VERSION_V1 => {
+            GGUF_VERSION_V1 => {
                 let mut buffer: [u32; 2] = [0; 2];
                 match self.bo {
                     ByteOrder::LE => {
@@ -147,7 +206,7 @@ impl GGUFContainer {
                     num_kv: buffer[1],
                 });
             }
-            VERSION_V2 | VERSION_V3 => {
+            GGUF_VERSION_V2 | GGUF_VERSION_V3 => {
                 let mut buffer: [u64; 2] = [0; 2];
                 match self.bo {
                     ByteOrder::LE => {
@@ -160,7 +219,7 @@ impl GGUFContainer {
                     }
                 };
 
-                if version == VERSION_V2 {
+                if version == GGUF_VERSION_V2 {
                     self.version = Version::V2(V2 {
                         num_tensor: buffer[0],
                         num_kv: buffer[1],
@@ -189,11 +248,12 @@ impl GGUFContainer {
             version: self.version.clone(),
         };
 
-        model.decode(&mut self.reader);
+        model.decode(&mut self.reader)?;
         Ok(model)
     }
 }
 
+/// Tensor in the GGUF file.
 #[derive(Debug, Clone)]
 pub struct Tensor {
     pub name: String,
@@ -204,6 +264,7 @@ pub struct Tensor {
     pub shape: Vec<u64>,
 }
 
+/// GGUF model.
 pub struct GGUFModel {
     kv: BTreeMap<String, Value>,
     tensors: Vec<Tensor>,
@@ -253,6 +314,7 @@ impl TryFrom<u32> for MetadataValueType {
     }
 }
 
+/// GGML type of a tensor in the GGUF file.
 #[derive(Debug, Serialize)]
 pub enum GGMLType {
     F32 = 0,
@@ -329,6 +391,7 @@ impl TryFrom<u32> for GGMLType {
 }
 
 impl GGUFModel {
+    /// Decode the GGUF file.
     pub(crate) fn decode(&mut self, mut reader: impl std::io::Read) -> Result<()> {
         // decode kv
         for i in 0..self.num_kv() {
@@ -524,6 +587,7 @@ impl GGUFModel {
         }
     }
 
+    /// Get the version of the GGUF file.
     pub fn get_version(&self) -> String {
         match &self.version {
             Version::V1(_) => String::from("v1"),
@@ -532,6 +596,7 @@ impl GGUFModel {
         }
     }
 
+    /// Get the number of key-value pairs in the GGUF file.
     pub fn num_kv(&self) -> u64 {
         match &self.version {
             Version::V1(v1) => v1.num_kv as u64,
@@ -540,6 +605,7 @@ impl GGUFModel {
         }
     }
 
+    /// Get the number of tensors in the GGUF file.
     pub fn num_tensor(&self) -> u64 {
         match &self.version {
             Version::V1(v1) => v1.num_tensor as u64,
@@ -548,6 +614,7 @@ impl GGUFModel {
         }
     }
 
+    /// Get the model family of the GGUF file.
     pub fn model_family(&self) -> String {
         let arch = self
             .kv
@@ -561,6 +628,7 @@ impl GGUFModel {
         }
     }
 
+    /// Get the number of parameters in the GGUF file.
     pub fn model_parameters(&self) -> String {
         if self.parameters > 0 {
             human_number(self.parameters)
@@ -569,6 +637,7 @@ impl GGUFModel {
         }
     }
 
+    /// Get the file type of the GGUF file.
     pub fn file_type(&self) -> String {
         if let Some(ft) = self.kv.get("general.file_type") {
             file_type(ft.as_u64().unwrap())
@@ -577,15 +646,18 @@ impl GGUFModel {
         }
     }
 
+    /// Get the key-value metadata of the GGUF file.
     pub fn metadata(&self) -> &BTreeMap<String, Value> {
         &self.kv
     }
 
+    /// Get the tensors of the GGUF file.
     pub fn tensors(&self) -> &Vec<Tensor> {
         &self.tensors
     }
 }
 
+/// Get a `GGUFContainer` from a file.
 pub fn get_gguf_container(file: &str) -> Result<GGUFContainer> {
     if !std::path::Path::new(file).exists() {
         return Err(anyhow!("file not found"));
