@@ -3,7 +3,11 @@ use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{borrow::Borrow, collections::HashMap, fmt::Display};
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+};
 
 /// Magic constant for `ggml` files (unversioned).
 pub const FILE_MAGIC_GGML: i32 = 0x67676d6c;
@@ -116,7 +120,7 @@ impl GGUFContainer {
         }
     }
 
-    pub fn decode(&mut self) -> GGUFModel {
+    pub fn decode(&mut self) -> Result<GGUFModel> {
         let version = match self.bo {
             ByteOrder::LE => self.reader.read_i32::<LittleEndian>().unwrap(),
             ByteOrder::BE => self.reader.read_i32::<BigEndian>().unwrap(),
@@ -168,11 +172,16 @@ impl GGUFContainer {
                     });
                 }
             }
-            _ => panic!("unsupport version"),
+            invalid_version => {
+                return Err(anyhow!(
+                    "invalid version {}, only support version: 1 | 2 | 3",
+                    invalid_version
+                ))
+            }
         };
 
         let mut model = GGUFModel {
-            kv: HashMap::new(),
+            kv: BTreeMap::new(),
             tensors: Vec::new(),
             parameters: 0,
 
@@ -181,7 +190,7 @@ impl GGUFContainer {
         };
 
         model.decode(&mut self.reader);
-        model
+        Ok(model)
     }
 }
 
@@ -196,7 +205,7 @@ pub struct Tensor {
 }
 
 pub struct GGUFModel {
-    kv: HashMap<String, Value>,
+    kv: BTreeMap<String, Value>,
     tensors: Vec<Tensor>,
     parameters: u64,
 
@@ -221,9 +230,11 @@ pub enum MetadataValueType {
     Float64 = 12,
 }
 
-impl From<u32> for MetadataValueType {
-    fn from(v: u32) -> Self {
-        match v {
+impl TryFrom<u32> for MetadataValueType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Ok(match value {
             0 => MetadataValueType::Uint8,
             1 => MetadataValueType::Int8,
             2 => MetadataValueType::Uint16,
@@ -237,8 +248,8 @@ impl From<u32> for MetadataValueType {
             10 => MetadataValueType::Uint64,
             11 => MetadataValueType::Int64,
             12 => MetadataValueType::Float64,
-            _ => panic!("unsupport metadata value type"),
-        }
+            _ => return Err(anyhow!("unsupport metadata value type")),
+        })
     }
 }
 
@@ -289,9 +300,11 @@ impl Display for GGMLType {
     }
 }
 
-impl From<u32> for GGMLType {
-    fn from(item: u32) -> Self {
-        match item {
+impl TryFrom<u32> for GGMLType {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u32) -> std::prelude::v1::Result<Self, Self::Error> {
+        Ok(match value {
             0 => GGMLType::F32,
             1 => GGMLType::F16,
             2 => GGMLType::Q4_0,
@@ -310,17 +323,17 @@ impl From<u32> for GGMLType {
             17 => GGMLType::I16,
             18 => GGMLType::I32,
             19 => GGMLType::Count,
-            _ => panic!("invalid GGML type"),
-        }
+            _ => return Err(anyhow!("invalid GGML type")),
+        })
     }
 }
 
 impl GGUFModel {
-    pub(crate) fn decode(&mut self, mut reader: impl std::io::Read) {
+    pub(crate) fn decode(&mut self, mut reader: impl std::io::Read) -> Result<()> {
         // decode kv
         for i in 0..self.num_kv() {
             let key = self.read_string(&mut reader);
-            let value_type: MetadataValueType = self.read_u32(&mut reader).into();
+            let value_type: MetadataValueType = self.read_u32(&mut reader).try_into()?;
             let value = match value_type {
                 MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)),
                 MetadataValueType::Int8 => Value::from(self.read_i8(&mut reader)),
@@ -331,7 +344,7 @@ impl GGUFModel {
                 MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)),
                 MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)),
                 MetadataValueType::String => Value::from(self.read_string(&mut reader)),
-                MetadataValueType::Array => Value::from(self.read_array(&mut reader, true)),
+                MetadataValueType::Array => Value::from(self.read_array(&mut reader, 3)?),
                 MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)),
                 MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)),
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)),
@@ -360,7 +373,7 @@ impl GGUFModel {
                 _ => 256,
             };
             //let mut type_size: u64;
-            let ggml_type_kind: GGMLType = kind.into();
+            let ggml_type_kind: GGMLType = kind.try_into()?;
             let type_size = match ggml_type_kind {
                 GGMLType::F32 => 4,
                 GGMLType::F16 => 2,
@@ -395,6 +408,8 @@ impl GGUFModel {
 
             self.parameters += parameters;
         }
+
+        Ok(())
     }
 
     fn read_u8(&self, mut reader: impl std::io::Read) -> u8 {
@@ -472,9 +487,9 @@ impl GGUFModel {
         String::from_utf8_lossy(&buffer).to_string()
     }
 
-    fn read_array(&self, mut reader: impl std::io::Read, return_empty: bool) -> Vec<Value> {
+    fn read_array(&self, mut reader: impl std::io::Read, read_count: usize) -> Result<Vec<Value>> {
         let mut data = Vec::new();
-        let item_type: MetadataValueType = self.read_u32(&mut reader).into();
+        let item_type: MetadataValueType = self.read_u32(&mut reader).try_into()?;
         let array_len = self.read_version_size(&mut reader);
         for _ in 0..array_len {
             let value = match item_type {
@@ -490,15 +505,15 @@ impl GGUFModel {
                 MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)),
                 MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)),
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)),
-                _ => panic!("unsupport array item value type: Array"),
+                _ => return Err(anyhow!("Unsupport item value type: Array")),
             };
 
-            if !return_empty {
+            if read_count > 0 && data.len() < read_count {
                 data.push(value);
             }
         }
 
-        data
+        Ok(data)
     }
 
     fn read_version_size(&self, mut reader: impl std::io::Read) -> u64 {
@@ -562,7 +577,7 @@ impl GGUFModel {
         }
     }
 
-    pub fn metadata(&self) -> &HashMap<String, Value> {
+    pub fn metadata(&self) -> &BTreeMap<String, Value> {
         &self.kv
     }
 
@@ -597,7 +612,7 @@ mod tests {
     #[test]
     fn test_read_le_v3_gguf() {
         let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
-        let model = container.decode();
+        let model = container.decode().unwrap();
         assert_eq!(model.get_version(), "v3");
         assert_eq!(model.model_family(), "llama");
         assert_eq!(model.file_type(), "unknown");

@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use comfy_table::Table;
 use gguf::{get_gguf_container, GGMLType, GGUFModel};
-use log::{debug, LevelFilter};
+use log::LevelFilter;
 use simple_logger::SimpleLogger;
 
 fn print_metadata(model: &GGUFModel) {
@@ -49,7 +49,7 @@ fn print_tensors(model: &GGUFModel) {
         table.add_row(vec![
             (i + 1).to_string(),
             tensor.name.clone(),
-            GGMLType::from(tensor.kind).to_string(),
+            GGMLType::try_from(tensor.kind).unwrap().to_string(),
             tensor
                 .shape
                 .iter()
@@ -72,15 +72,8 @@ fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<String>>();
     let file = args.first().unwrap();
 
-    let gguf_model = match get_gguf_container(file) {
-        Ok(mut container) => container.decode(),
-        Err(err) => return Err(anyhow!(err.to_string())),
-    };
-
-    debug!("gguf version {}", gguf_model.get_version());
-    debug!("model family {}", gguf_model.model_family());
-    debug!("model parameter {}", gguf_model.model_parameters());
-    debug!("file type {}", gguf_model.file_type());
+    let mut gguf_container = get_gguf_container(file)?;
+    let gguf_model = gguf_container.decode()?;
 
     print_metadata(&gguf_model);
     print_tensors(&gguf_model);
