@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2024-01-04
+
+### Bug Fixes
+
+- Enable feature `debug` to print debug log
+
 ## [0.1.0] - 2024-01-04
 
 ### Documentation
