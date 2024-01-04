@@ -18,7 +18,7 @@ keywords = [
 ]
 repository = "https://github.com/zackshen/gguf"
 homepage = "https://github.com/zackshen/gguf"
-include = ["/src", "README.md"]
+include = ["src/**/*", "README.md"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
