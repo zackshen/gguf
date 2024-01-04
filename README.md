@@ -11,11 +11,11 @@ This is a Rust project that provides functionality for decoding and working with
 ## Usage
 
 ```rust
-use gguf::GGUFContainer;
+use gguf::get_gguf_container;
 use std::fs::File;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut container = GGUFContainer::get_gguf_container("path_to_your_file")?;
+    let mut container = get_gguf_container("path_to_your_file")?;
     let model = container.decode()?;
     println!("Model Family: {}", model.model_family());
     println!("Number of Parameters: {}", model.model_parameters());
