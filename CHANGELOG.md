@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2024-01-04
+
+### Bug Fixes
+
+- Fix example code in document.
+
+### Miscellaneous Tasks
+
+- Add unittest workflow
+- Add status badge into README.md
+- Add status badge into README.md
+- Fix code example in README.md
+- Update README.md
+
 ## [0.1.1] - 2024-01-04
 
 ### Bug Fixes
