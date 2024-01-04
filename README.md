@@ -35,6 +35,10 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 Please make sure to update tests as appropriate.
 
+## GGUF Specification
+
+[GGUF Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
+
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit/)
