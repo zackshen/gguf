@@ -5,17 +5,7 @@ description = "GGUF file parser"
 edition = "2021"
 license = "MIT"
 authors = ["Zack Shen <zackshen0526@gmail.com>"]
-keywords = [
-    "gguf",
-    "ggml",
-    "parser",
-    "metadata",
-    "ai",
-    "GPT",
-    "llama",
-    "model",
-    "llm",
-]
+keywords = ["gguf", "parser", "GPT", "llama", "llm"]
 repository = "https://github.com/zackshen/gguf"
 homepage = "https://github.com/zackshen/gguf"
 include = ["src/**/*", "README.md"]
