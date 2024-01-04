@@ -2,7 +2,8 @@
 
 This is a Rust project that provides functionality for decoding and working with GGUF files. GGUF files are binary files that contain key-value metadata and tensors.
 
-![test](https://github.com/zackshen/gguf/actions/workflows/test.yml/badge.svg)
+![Unit test](https://github.com/zackshen/gguf/actions/workflows/test.yml/badge.svg)
+![Publish](https://github.com/zackshen/gguf/actions/workflows/publish.yml/badge.svg)
 
 ## Features
 
