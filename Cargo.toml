@@ -21,3 +21,8 @@ log = "0.4.20"
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = { version = "1.0.110", features = ["arbitrary_precision"] }
 simple_logger = "4.3.3"
+
+
+[features]
+default = []
+debug = []

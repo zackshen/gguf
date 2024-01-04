@@ -32,6 +32,7 @@
 /// ```
 use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
+#[cfg(feature = "debug")]
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -185,7 +186,10 @@ impl GGUFContainer {
             ByteOrder::BE => self.reader.read_i32::<BigEndian>().unwrap(),
         };
 
-        debug!("version {}", version);
+        #[cfg(feature = "debug")]
+        {
+            debug!("version {}", version);
+        }
 
         match version {
             GGUF_VERSION_V1 => {
@@ -394,7 +398,7 @@ impl GGUFModel {
     /// Decode the GGUF file.
     pub(crate) fn decode(&mut self, mut reader: impl std::io::Read) -> Result<()> {
         // decode kv
-        for i in 0..self.num_kv() {
+        for _i in 0..self.num_kv() {
             let key = self.read_string(&mut reader);
             let value_type: MetadataValueType = self.read_u32(&mut reader).try_into()?;
             let value = match value_type {
@@ -412,10 +416,13 @@ impl GGUFModel {
                 MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)),
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)),
             };
-            debug!(
-                "kv [{}] vtype {:?} key={}, value={}",
-                i, value_type, key, value
-            );
+            #[cfg(feature = "debug")]
+            {
+                debug!(
+                    "kv [{}] vtype {:?} key={}, value={}",
+                    _i, value_type, key, value
+                );
+            }
             self.kv.insert(key, value);
         }
 
@@ -435,7 +442,6 @@ impl GGUFModel {
                 _ if kind < 10 => 32,
                 _ => 256,
             };
-            //let mut type_size: u64;
             let ggml_type_kind: GGMLType = kind.try_into()?;
             let type_size = match ggml_type_kind {
                 GGMLType::F32 => 4,
@@ -665,7 +671,6 @@ pub fn get_gguf_container(file: &str) -> Result<GGUFContainer> {
 
     let mut reader = std::fs::File::open(file).unwrap();
     let byte_le = reader.read_i32::<LittleEndian>().unwrap();
-    debug!("file magic: {:x}", byte_le);
     match byte_le {
         FILE_MAGIC_GGML => Err(anyhow!("unsupport ggml format")),
         FILE_MAGIC_GGMF => Err(anyhow!("unsupport ggmf format")),
