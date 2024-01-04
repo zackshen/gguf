@@ -1,6 +1,6 @@
 use anyhow::Result;
 use comfy_table::Table;
-use gguf::{get_gguf_container, GGMLType, GGUFModel};
+use gguf_rs::{get_gguf_container, GGMLType, GGUFModel};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 

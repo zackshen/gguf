@@ -1,5 +1,5 @@
 [package]
-name = "gguf"
+name = "gguf-rs"
 version = "0.1.0"
 description = "GGUF file parser"
 edition = "2021"
