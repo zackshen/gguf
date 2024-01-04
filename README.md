@@ -14,8 +14,7 @@ This is a Rust project that provides functionality for decoding and working with
 ## Usage
 
 ```rust
-use gguf::get_gguf_container;
-use std::fs::File;
+use gguf_rs::get_gguf_container;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut container = get_gguf_container("path_to_your_file")?;
@@ -26,6 +25,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Number of Tensors: {}", model.num_tensor());
     Ok(())
 }
+```
+
+also you can install `gguf-rs` as a command line tool.
+
+```bash
+cargo install gguf-rs
+```
+
+show model file info
+
+```bash
+gguf path_to_your_file
 ```
 
 ## Testing
