@@ -180,8 +180,8 @@ impl GGUFContainer {
     /// Decode the GGUF file and return a `GGUFModel`.
     pub fn decode(&mut self) -> Result<GGUFModel> {
         let version = match self.bo {
-            ByteOrder::LE => self.reader.read_i32::<LittleEndian>().unwrap(),
-            ByteOrder::BE => self.reader.read_i32::<BigEndian>().unwrap(),
+            ByteOrder::LE => self.reader.read_i32::<LittleEndian>()?,
+            ByteOrder::BE => self.reader.read_i32::<BigEndian>()?,
         };
 
         #[cfg(feature = "debug")]
@@ -193,14 +193,8 @@ impl GGUFContainer {
             GGUF_VERSION_V1 => {
                 let mut buffer: [u32; 2] = [0; 2];
                 match self.bo {
-                    ByteOrder::LE => {
-                        self.reader
-                            .read_u32_into::<LittleEndian>(&mut buffer)
-                            .unwrap();
-                    }
-                    ByteOrder::BE => {
-                        self.reader.read_u32_into::<BigEndian>(&mut buffer).unwrap();
-                    }
+                    ByteOrder::LE => self.reader.read_u32_into::<LittleEndian>(&mut buffer)?,
+                    ByteOrder::BE => self.reader.read_u32_into::<BigEndian>(&mut buffer)?,
                 };
 
                 self.version = Version::V1(V1 {
@@ -211,14 +205,8 @@ impl GGUFContainer {
             GGUF_VERSION_V2 | GGUF_VERSION_V3 => {
                 let mut buffer: [u64; 2] = [0; 2];
                 match self.bo {
-                    ByteOrder::LE => {
-                        self.reader
-                            .read_u64_into::<LittleEndian>(&mut buffer)
-                            .unwrap();
-                    }
-                    ByteOrder::BE => {
-                        self.reader.read_u64_into::<BigEndian>(&mut buffer).unwrap();
-                    }
+                    ByteOrder::LE => self.reader.read_u64_into::<LittleEndian>(&mut buffer)?,
+                    ByteOrder::BE => self.reader.read_u64_into::<BigEndian>(&mut buffer)?,
                 };
 
                 if version == GGUF_VERSION_V2 {
@@ -397,22 +385,22 @@ impl GGUFModel {
     pub(crate) fn decode(&mut self, mut reader: impl std::io::Read) -> Result<()> {
         // decode kv
         for _i in 0..self.num_kv() {
-            let key = self.read_string(&mut reader);
-            let value_type: MetadataValueType = self.read_u32(&mut reader).try_into()?;
+            let key = self.read_string(&mut reader)?;
+            let value_type: MetadataValueType = self.read_u32(&mut reader)?.try_into()?;
             let value = match value_type {
-                MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)),
-                MetadataValueType::Int8 => Value::from(self.read_i8(&mut reader)),
-                MetadataValueType::Uint16 => Value::from(self.read_u16(&mut reader)),
-                MetadataValueType::Int16 => Value::from(self.read_i16(&mut reader)),
-                MetadataValueType::Uint32 => Value::from(self.read_u32(&mut reader)),
-                MetadataValueType::Int32 => Value::from(self.read_i32(&mut reader)),
-                MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)),
-                MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)),
-                MetadataValueType::String => Value::from(self.read_string(&mut reader)),
+                MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)?),
+                MetadataValueType::Int8 => Value::from(self.read_i8(&mut reader)?),
+                MetadataValueType::Uint16 => Value::from(self.read_u16(&mut reader)?),
+                MetadataValueType::Int16 => Value::from(self.read_i16(&mut reader)?),
+                MetadataValueType::Uint32 => Value::from(self.read_u32(&mut reader)?),
+                MetadataValueType::Int32 => Value::from(self.read_i32(&mut reader)?),
+                MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)?),
+                MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)?),
+                MetadataValueType::String => Value::from(self.read_string(&mut reader)?),
                 MetadataValueType::Array => Value::from(self.read_array(&mut reader, 3)?),
-                MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)),
-                MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)),
-                MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)),
+                MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)?),
+                MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)?),
+                MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)?),
             };
             #[cfg(feature = "debug")]
             {
@@ -426,15 +414,15 @@ impl GGUFModel {
 
         // decode tensors
         for _ in 0..self.num_tensor() {
-            let name = self.read_string(&mut reader);
-            let dims = self.read_u32(&mut reader);
+            let name = self.read_string(&mut reader)?;
+            let dims = self.read_u32(&mut reader)?;
             let mut shape = [1; 4];
             for i in 0..dims {
-                shape[i as usize] = self.read_u64(&mut reader);
+                shape[i as usize] = self.read_u64(&mut reader)?;
             }
 
-            let kind = self.read_u32(&mut reader);
-            let offset = self.read_u64(&mut reader);
+            let kind = self.read_u32(&mut reader)?;
+            let offset = self.read_u64(&mut reader)?;
             let block_size = match kind {
                 _ if kind < 2 => 1,
                 _ if kind < 10 => 32,
@@ -479,99 +467,99 @@ impl GGUFModel {
         Ok(())
     }
 
-    fn read_u8(&self, mut reader: impl std::io::Read) -> u8 {
-        reader.read_u8().unwrap()
+    fn read_u8(&self, mut reader: impl std::io::Read) -> Result<u8> {
+        Ok(reader.read_u8()?)
     }
 
-    fn read_u32(&self, mut reader: impl std::io::Read) -> u32 {
-        match self.bo {
-            ByteOrder::LE => reader.read_u32::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_u32::<BigEndian>().unwrap(),
-        }
+    fn read_u32(&self, mut reader: impl std::io::Read) -> Result<u32> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_u32::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_u32::<BigEndian>()?,
+        })
     }
 
-    fn read_f32(&self, mut reader: impl std::io::Read) -> f32 {
-        match self.bo {
-            ByteOrder::LE => reader.read_f32::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_f32::<BigEndian>().unwrap(),
-        }
+    fn read_f32(&self, mut reader: impl std::io::Read) -> Result<f32> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_f32::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_f32::<BigEndian>()?,
+        })
     }
 
-    fn read_f64(&self, mut reader: impl std::io::Read) -> f64 {
-        match self.bo {
-            ByteOrder::LE => reader.read_f64::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_f64::<BigEndian>().unwrap(),
-        }
+    fn read_f64(&self, mut reader: impl std::io::Read) -> Result<f64> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_f64::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_f64::<BigEndian>()?,
+        })
     }
 
-    fn read_u64(&self, mut reader: impl std::io::Read) -> u64 {
-        match self.bo {
-            ByteOrder::LE => reader.read_u64::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_u64::<BigEndian>().unwrap(),
-        }
+    fn read_u64(&self, mut reader: impl std::io::Read) -> Result<u64> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_u64::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_u64::<BigEndian>()?,
+        })
     }
 
-    fn read_i8(&self, mut reader: impl std::io::Read) -> i8 {
-        reader.read_i8().unwrap()
+    fn read_i8(&self, mut reader: impl std::io::Read) -> Result<i8> {
+        Ok(reader.read_i8()?)
     }
 
-    fn read_u16(&self, mut reader: impl std::io::Read) -> u16 {
-        match self.bo {
-            ByteOrder::LE => reader.read_u16::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_u16::<BigEndian>().unwrap(),
-        }
+    fn read_u16(&self, mut reader: impl std::io::Read) -> Result<u16> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_u16::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_u16::<BigEndian>()?,
+        })
     }
 
-    fn read_i16(&self, mut reader: impl std::io::Read) -> i16 {
-        match self.bo {
-            ByteOrder::LE => reader.read_i16::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_i16::<BigEndian>().unwrap(),
-        }
+    fn read_i16(&self, mut reader: impl std::io::Read) -> Result<i16> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_i16::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_i16::<BigEndian>()?,
+        })
     }
 
-    fn read_i32(&self, mut reader: impl std::io::Read) -> i32 {
-        match self.bo {
-            ByteOrder::LE => reader.read_i32::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_i32::<BigEndian>().unwrap(),
-        }
+    fn read_i32(&self, mut reader: impl std::io::Read) -> Result<i32> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_i32::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_i32::<BigEndian>()?,
+        })
     }
 
-    fn read_i64(&self, mut reader: impl std::io::Read) -> i64 {
-        match self.bo {
-            ByteOrder::LE => reader.read_i64::<LittleEndian>().unwrap(),
-            ByteOrder::BE => reader.read_i64::<BigEndian>().unwrap(),
-        }
+    fn read_i64(&self, mut reader: impl std::io::Read) -> Result<i64> {
+        Ok(match self.bo {
+            ByteOrder::LE => reader.read_i64::<LittleEndian>()?,
+            ByteOrder::BE => reader.read_i64::<BigEndian>()?,
+        })
     }
 
-    fn read_bool(&self, mut reader: impl std::io::Read) -> bool {
-        reader.read_u8().unwrap() != 0
+    fn read_bool(&self, mut reader: impl std::io::Read) -> Result<bool> {
+        Ok(reader.read_u8()? != 0)
     }
 
-    fn read_string(&self, mut reader: impl std::io::Read) -> String {
-        let name_len = self.read_version_size(&mut reader);
+    fn read_string(&self, mut reader: impl std::io::Read) -> Result<String> {
+        let name_len = self.read_version_size(&mut reader)?;
         let mut buffer = vec![0; name_len as usize];
-        reader.read_exact(&mut buffer).unwrap();
-        String::from_utf8_lossy(&buffer).to_string()
+        reader.read_exact(&mut buffer)?;
+        Ok(String::from_utf8_lossy(&buffer).to_string())
     }
 
     fn read_array(&self, mut reader: impl std::io::Read, read_count: usize) -> Result<Vec<Value>> {
         let mut data = Vec::new();
-        let item_type: MetadataValueType = self.read_u32(&mut reader).try_into()?;
-        let array_len = self.read_version_size(&mut reader);
+        let item_type: MetadataValueType = self.read_u32(&mut reader)?.try_into()?;
+        let array_len = self.read_version_size(&mut reader)?;
         for _ in 0..array_len {
             let value = match item_type {
-                MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)),
-                MetadataValueType::Int8 => Value::from(self.read_i8(&mut reader)),
-                MetadataValueType::Uint16 => Value::from(self.read_u16(&mut reader)),
-                MetadataValueType::Int16 => Value::from(self.read_i16(&mut reader)),
-                MetadataValueType::Uint32 => Value::from(self.read_u32(&mut reader)),
-                MetadataValueType::Int32 => Value::from(self.read_i32(&mut reader)),
-                MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)),
-                MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)),
-                MetadataValueType::String => Value::from(self.read_string(&mut reader)),
-                MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)),
-                MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)),
-                MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)),
+                MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)?),
+                MetadataValueType::Int8 => Value::from(self.read_i8(&mut reader)?),
+                MetadataValueType::Uint16 => Value::from(self.read_u16(&mut reader)?),
+                MetadataValueType::Int16 => Value::from(self.read_i16(&mut reader)?),
+                MetadataValueType::Uint32 => Value::from(self.read_u32(&mut reader)?),
+                MetadataValueType::Int32 => Value::from(self.read_i32(&mut reader)?),
+                MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)?),
+                MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)?),
+                MetadataValueType::String => Value::from(self.read_string(&mut reader)?),
+                MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)?),
+                MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)?),
+                MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)?),
                 _ => return Err(anyhow!("Unsupport item value type: Array")),
             };
 
@@ -583,12 +571,12 @@ impl GGUFModel {
         Ok(data)
     }
 
-    fn read_version_size(&self, mut reader: impl std::io::Read) -> u64 {
-        match self.version.borrow() {
-            Version::V1(_) => self.read_u32(&mut reader) as u64,
-            Version::V2(_) => self.read_u64(&mut reader),
-            Version::V3(_) => self.read_u64(&mut reader),
-        }
+    fn read_version_size(&self, mut reader: impl std::io::Read) -> Result<u64> {
+        Ok(match self.version.borrow() {
+            Version::V1(_) => self.read_u32(&mut reader)? as u64,
+            Version::V2(_) => self.read_u64(&mut reader)?,
+            Version::V3(_) => self.read_u64(&mut reader)?,
+        })
     }
 
     /// Get the version of the GGUF file.
@@ -667,8 +655,8 @@ pub fn get_gguf_container(file: &str) -> Result<GGUFContainer> {
         return Err(anyhow!("file not found"));
     }
 
-    let mut reader = std::fs::File::open(file).unwrap();
-    let byte_le = reader.read_i32::<LittleEndian>().unwrap();
+    let mut reader = std::fs::File::open(file)?;
+    let byte_le = reader.read_i32::<LittleEndian>()?;
     match byte_le {
         FILE_MAGIC_GGML => Err(anyhow!("unsupport ggml format")),
         FILE_MAGIC_GGMF => Err(anyhow!("unsupport ggmf format")),
