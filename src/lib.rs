@@ -11,17 +11,16 @@
 ///
 /// Example usage:
 /// ```
-/// use gguf::GGUFContainer;
+/// use gguf_rs::{get_gguf_container};
 /// use std::fs::File;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let file = File::open("example.gguf")?;
-///     let container = GGUFContainer::new(gguf::ByteOrder::LE, Box::new(file));
+///     let mut container = get_gguf_container("tests/test-le-v3.gguf")?;
 ///     let model = container.decode()?;
 ///
 ///     println!("GGUF version: {}", model.get_version());
 ///
-///     for tensor in model.get_tensors() {
+///     for tensor in model.tensors() {
 ///         println!("Tensor name: {}", tensor.name);
 ///         println!("Tensor kind: {}", tensor.kind);
 ///         println!("Tensor shape: {:?}", tensor.shape);
@@ -144,17 +143,16 @@ impl GGUFContainer {
     /// Create a new `GGUFContainer` from a byte order and a reader.
     /// The reader must implement the `std::io::Read` trait.
     /// ```
-    /// use gguf::GGUFContainer;
+    /// use gguf_rs::{get_gguf_container};
     /// use std::fs::File;
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let file = File::open("example.gguf")?;
-    ///     let container = GGUFContainer::new(gguf::ByteOrder::LE, Box::new(file));
+    ///     let mut container = get_gguf_container("tests/test-le-v3.gguf")?;
     ///     let model = container.decode()?;
     ///
     ///     println!("GGUF version: {}", model.get_version());
     ///
-    ///     for tensor in model.get_tensors() {
+    ///     for tensor in model.tensors() {
     ///         println!("Tensor name: {}", tensor.name);
     ///         println!("Tensor kind: {}", tensor.kind);
     ///         println!("Tensor shape: {:?}", tensor.shape);
