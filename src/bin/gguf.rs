@@ -1,8 +1,28 @@
 use anyhow::Result;
+use clap::Parser;
 use comfy_table::Table;
 use gguf_rs::{get_gguf_container, GGMLType, GGUFModel};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
+
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Cli {
+    /// model file path
+    model: String,
+
+    /// show metadata
+    #[arg(short, long, default_value_t = true)]
+    metadata: bool,
+
+    /// show tensors
+    #[arg(short, long, default_value_t = false)]
+    tensors: bool,
+
+    /// show debug log
+    #[arg(short, long)]
+    debug: bool,
+}
 
 fn print_metadata(model: &GGUFModel) {
     let mut table = Table::new();
@@ -64,18 +84,24 @@ fn print_tensors(model: &GGUFModel) {
 }
 
 fn main() -> Result<()> {
-    SimpleLogger::default()
-        .with_level(LevelFilter::Debug)
-        .init()
-        .unwrap();
+    let args = Cli::parse();
 
-    let args = std::env::args().skip(1).collect::<Vec<String>>();
-    let file = args.first().unwrap();
+    if args.debug {
+        SimpleLogger::default()
+            .with_level(LevelFilter::Debug)
+            .init()
+            .unwrap();
+    }
 
-    let mut gguf_container = get_gguf_container(file)?;
+    let mut gguf_container = get_gguf_container(&args.model)?;
     let gguf_model = gguf_container.decode()?;
 
-    print_metadata(&gguf_model);
-    print_tensors(&gguf_model);
+    if args.metadata {
+        print_metadata(&gguf_model);
+    }
+
+    if args.tensors {
+        print_tensors(&gguf_model);
+    }
     Ok(())
 }
