@@ -497,7 +497,7 @@ impl GGUFModel {
                 GGMLType::I64 => 8,
                 GGMLType::F64 => 8,
                 GGMLType::IQ1_M => block_size / 8 + block_size / 16 + block_size / 32,
-                GGMLType::Count => todo!(),
+                GGMLType::Count => unreachable!("GGMLType::Count is not a real data format"),
             };
 
             let parameters = shape[0] * shape[1] * shape[2] * shape[3];
