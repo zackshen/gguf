@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2025-05-13
+
+### Features
+
+- Add more GGML Types
+
+### Miscellaneous Tasks
+
+- Update CHANGELOG.md
+
 ## [0.1.3] - 2024-02-08
 
 ### Bug Fixes
