@@ -8,12 +8,14 @@ def write_gguf_file(out_path: str):
     write a minimalist GGUF file, example taken from
     https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/gguf/gguf.py
     """
-    gguf_writer = GGUFWriter(out_path, "llama", endianess=GGUFEndian.BIG)
+    gguf_writer = GGUFWriter(out_path, "llama", endianess=GGUFEndian.LITTLE)
 
     gguf_writer.add_architecture()
     gguf_writer.add_block_count(12)
     gguf_writer.add_uint32("answer", 42)
     gguf_writer.add_float32("answer_in_float", 42.0)
+    gguf_writer.add_array("tokenizer.ggml.tokens", ["a", "b", "c", "d", "e"])
+    
     gguf_writer.add_custom_alignment(64)
 
     tensor1 = np.ones((32,), dtype=np.float32) * 100.0
