@@ -143,6 +143,7 @@ pub struct GGUFContainer {
     bo: ByteOrder,
     version: Version,
     reader: Box<dyn std::io::Read + 'static>,
+    max_array_size: u64,
 }
 
 impl GGUFContainer {
@@ -166,11 +167,12 @@ impl GGUFContainer {
     ///
     ///     Ok(())
     /// }
-    pub fn new(bo: ByteOrder, reader: Box<dyn std::io::Read>) -> Self {
+    pub fn new(bo: ByteOrder, reader: Box<dyn std::io::Read>, max_array_size: u64) -> Self {
         Self {
             bo,
             version: Version::V1(V1::default()),
             reader,
+            max_array_size,
         }
     }
 
@@ -239,7 +241,7 @@ impl GGUFContainer {
             kv: BTreeMap::new(),
             tensors: Vec::new(),
             parameters: 0,
-
+            max_array_size: self.max_array_size,
             bo: self.bo.clone(),
             version: self.version.clone(),
         };
@@ -265,7 +267,7 @@ pub struct GGUFModel {
     kv: BTreeMap<String, Value>,
     tensors: Vec<Tensor>,
     parameters: u64,
-
+    max_array_size: u64,
     bo: ByteOrder,
     version: Version,
 }
@@ -467,7 +469,7 @@ impl GGUFModel {
                 MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)?),
                 MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)?),
                 MetadataValueType::String => Value::from(self.read_string(&mut reader)?),
-                MetadataValueType::Array => Value::from(self.read_array(&mut reader, 3)?),
+                MetadataValueType::Array => Value::from(self.read_array(&mut reader)?),
                 MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)?),
                 MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)?),
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)?),
@@ -634,10 +636,11 @@ impl GGUFModel {
         Ok(String::from_utf8_lossy(&buffer).to_string())
     }
 
-    fn read_array(&self, mut reader: impl std::io::Read, read_count: usize) -> Result<Vec<Value>> {
+    fn read_array(&self, mut reader: impl std::io::Read) -> Result<Vec<Value>> {
         let mut data = Vec::new();
         let item_type: MetadataValueType = self.read_u32(&mut reader)?.try_into()?;
         let array_len = self.read_version_size(&mut reader)?;
+        let read_count: usize = u64::min(array_len, self.max_array_size) as usize;
         for _ in 0..array_len {
             let value = match item_type {
                 MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)?),
@@ -654,7 +657,6 @@ impl GGUFModel {
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)?),
                 _ => return Err(anyhow!("Unsupport item value type: Array")),
             };
-
             if read_count > 0 && data.len() < read_count {
                 data.push(value);
             }
@@ -741,12 +743,16 @@ impl GGUFModel {
     }
 }
 
-/// Get a `GGUFContainer` from a file.
+/// Get a `GGUFContainer` from a file, truncating all arrays to length 3.
 pub fn get_gguf_container(file: &str) -> Result<GGUFContainer> {
+    get_gguf_container_array_size(file, 3)
+}
+
+/// Get a `GGUFContainer` from a file with the provided max array size.
+pub fn get_gguf_container_array_size(file: &str, max_array_size: u64) -> Result<GGUFContainer> {
     if !std::path::Path::new(file).exists() {
         return Err(anyhow!("file not found"));
     }
-
     let mut reader = std::fs::File::open(file)?;
     let byte_le = reader.read_i32::<LittleEndian>()?;
     match byte_le {
@@ -754,8 +760,8 @@ pub fn get_gguf_container(file: &str) -> Result<GGUFContainer> {
         FILE_MAGIC_GGMF => Err(anyhow!("unsupport ggmf format")),
         FILE_MAGIC_GGJT => Err(anyhow!("unsupport ggjt format")),
         FILE_MAGIC_GGLA => Err(anyhow!("unsupport ggla format")),
-        FILE_MAGIC_GGUF_LE => Ok(GGUFContainer::new(ByteOrder::LE, Box::new(reader))),
-        FILE_MAGIC_GGUF_BE => Ok(GGUFContainer::new(ByteOrder::BE, Box::new(reader))),
+        FILE_MAGIC_GGUF_LE => Ok(GGUFContainer::new(ByteOrder::LE, Box::new(reader), max_array_size)),
+        FILE_MAGIC_GGUF_BE => Ok(GGUFContainer::new(ByteOrder::BE, Box::new(reader), max_array_size)),
         _ => Err(anyhow!("invalid file magic")),
     }
 }
@@ -775,8 +781,34 @@ mod tests {
         assert_eq!(
             serde_json::to_value(model.kv).unwrap(),
             json!({
-                "general.architecture": "llama", "llama.block_count": 12, "general.alignment": 64, "answer": 42, "answer_in_float": 42.0
+                "general.architecture": "llama", 
+                "llama.block_count": 12, 
+                "general.alignment": 64, 
+                "answer": 42, 
+                "answer_in_float": 42.0,
+                "tokenizer.ggml.tokens": ["a", "b", "c"],
             })
+        );
+    }
+
+    #[test]
+    fn test_read_le_v3_gguf_with_tokens() {
+        let mut container = super::get_gguf_container_array_size("tests/test-le-v3.gguf", u64::MAX).unwrap();
+        let model = container.decode().unwrap();
+        assert_eq!(model.get_version(), "v3");
+        assert_eq!(model.model_family(), "llama");
+        assert_eq!(model.file_type(), "unknown");
+        assert_eq!(model.model_parameters(), "192");
+        println!("{:?}", model.kv);
+        assert_eq!(
+            serde_json::to_value(model.kv).unwrap(),
+            json!({
+                "general.architecture": "llama", 
+                "llama.block_count": 12, 
+                "general.alignment": 64, 
+                "answer": 42, 
+                "answer_in_float": 42.0,
+                "tokenizer.ggml.tokens": ["a", "b", "c", "d", "e"],})
         );
     }
 }
