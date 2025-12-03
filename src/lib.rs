@@ -354,7 +354,8 @@ pub enum GGMLType {
     IQ4_NL_4_4 = 36, // Unsupported
     IQ4_NL_4_8 = 37, // Unsupported
     IQ4_NL_8_8 = 38, // Unsupported
-    Count = 39,
+    MXFP4 = 39,
+    Count = 40,
 }
 
 impl Display for GGMLType {
@@ -399,6 +400,7 @@ impl Display for GGMLType {
             GGMLType::IQ4_NL_4_4 => write!(f, "IQ4_NL_4_4 (UNSUPPORTED)"),
             GGMLType::IQ4_NL_4_8 => write!(f, "IQ4_NL_4_8 (UNSUPPORTED)"),
             GGMLType::IQ4_NL_8_8 => write!(f, "IQ4_NL_8_8 (UNSUPPORTED)"),
+            GGMLType::MXFP4 => write!(f, "MXFP4"),
             GGMLType::Count => write!(f, "Count"),
         }
     }
@@ -446,7 +448,8 @@ impl TryFrom<u32> for GGMLType {
             36 => GGMLType::IQ4_NL_4_4,
             37 => GGMLType::IQ4_NL_4_8,
             38 => GGMLType::IQ4_NL_8_8,
-            39 => GGMLType::Count,
+            39 => GGMLType::MXFP4,
+            40 => GGMLType::Count,
             _ => return Err(anyhow!("invalid GGML type")),
         })
     }
@@ -476,10 +479,7 @@ impl GGUFModel {
             };
             #[cfg(feature = "debug")]
             {
-                debug!(
-                    "kv [{}] vtype {:?} key={}, value={}",
-                    _i, value_type, key, value
-                );
+                debug!("kv [{}] vtype {:?} key={}, value={}", _i, value_type, key, value);
             }
             self.kv.insert(key, value);
         }
@@ -541,6 +541,7 @@ impl GGUFModel {
                 GGMLType::Q4_0_4_4 => 0,
                 GGMLType::Q4_0_4_8 => 0,
                 GGMLType::Q4_0_8_8 => 0,
+                GGMLType::MXFP4 => block_size + 1 + 16,
                 GGMLType::Count => unreachable!("GGMLType::Count is not a real data format"),
             };
 
@@ -781,10 +782,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(model.kv).unwrap(),
             json!({
-                "general.architecture": "llama", 
-                "llama.block_count": 12, 
-                "general.alignment": 64, 
-                "answer": 42, 
+                "general.architecture": "llama",
+                "llama.block_count": 12,
+                "general.alignment": 64,
+                "answer": 42,
                 "answer_in_float": 42.0,
                 "tokenizer.ggml.tokens": ["a", "b", "c"],
             })
