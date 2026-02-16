@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2025-12-06
+
+### Features
+
+- Add support for MXFP4 type (by AvivAbachi)
+- Allow reading full array values from KV metadata (by jbooth)
+
+### Miscellaneous Tasks
+
+- Update CHANGELOG.md
+- Release gguf-rs version 0.1.5
+
 ## [0.1.4] - 2025-05-13
 
 ### Features
