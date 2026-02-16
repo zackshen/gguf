@@ -57,8 +57,6 @@
 //! ```
 
 use anyhow::{Result, anyhow};
-/// ```
-use anyhow::{Result, anyhow};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 #[cfg(feature = "debug")]
 use log::debug;
