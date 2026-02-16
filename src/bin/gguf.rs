@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use comfy_table::Table;
-use gguf_rs::{get_gguf_container, GGMLType, GGUFModel};
+use gguf_rs::{GGMLType, GGUFModel, get_gguf_container};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 

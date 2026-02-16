@@ -761,8 +761,12 @@ pub fn get_gguf_container_array_size(file: &str, max_array_size: u64) -> Result<
         FILE_MAGIC_GGMF => Err(anyhow!("unsupport ggmf format")),
         FILE_MAGIC_GGJT => Err(anyhow!("unsupport ggjt format")),
         FILE_MAGIC_GGLA => Err(anyhow!("unsupport ggla format")),
-        FILE_MAGIC_GGUF_LE => Ok(GGUFContainer::new(ByteOrder::LE, Box::new(reader), max_array_size)),
-        FILE_MAGIC_GGUF_BE => Ok(GGUFContainer::new(ByteOrder::BE, Box::new(reader), max_array_size)),
+        FILE_MAGIC_GGUF_LE => {
+            Ok(GGUFContainer::new(ByteOrder::LE, Box::new(reader), max_array_size))
+        }
+        FILE_MAGIC_GGUF_BE => {
+            Ok(GGUFContainer::new(ByteOrder::BE, Box::new(reader), max_array_size))
+        }
         _ => Err(anyhow!("invalid file magic")),
     }
 }
@@ -794,7 +798,8 @@ mod tests {
 
     #[test]
     fn test_read_le_v3_gguf_with_tokens() {
-        let mut container = super::get_gguf_container_array_size("tests/test-le-v3.gguf", u64::MAX).unwrap();
+        let mut container =
+            super::get_gguf_container_array_size("tests/test-le-v3.gguf", u64::MAX).unwrap();
         let model = container.decode().unwrap();
         assert_eq!(model.get_version(), "v3");
         assert_eq!(model.model_family(), "llama");
