@@ -901,7 +901,8 @@ mod tests {
     fn test_file_not_found() {
         let result = super::get_gguf_container("nonexistent.gguf");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("file not found"));
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("file not found"));
     }
 
     #[test]
@@ -909,7 +910,7 @@ mod tests {
         use std::io::Cursor;
         let invalid_data = vec![0x00, 0x00, 0x00, 0x00];
         let cursor = Cursor::new(invalid_data);
-        let container = super::GGUFContainer::new(
+        let mut container = super::GGUFContainer::new(
             super::ByteOrder::LE,
             Box::new(cursor),
             u64::MAX,
