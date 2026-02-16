@@ -14,13 +14,13 @@ categories = ["parser-implementations", "science"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.101"
 byteorder = "1.5.0"
-clap = { version = "4.5.38", features = ["derive"] }
-comfy-table = "7.1.4"
+clap = { version = "4.5.58", features = ["derive"] }
+comfy-table = "7.2.2"
 log = "0.4.27"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.140", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
 simple_logger = "5.0.1"
 
 
