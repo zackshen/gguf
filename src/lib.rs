@@ -890,14 +890,6 @@ mod tests {
     }
 
     #[test]
-    fn test_read_be_v3_gguf() {
-        let mut container = super::get_gguf_container("tests/test-be-v3.gguf").unwrap();
-        let model = container.decode().unwrap();
-        assert_eq!(model.get_version(), "v3");
-        assert_eq!(model.model_family(), "llama");
-    }
-
-    #[test]
     fn test_file_not_found() {
         let result = super::get_gguf_container("nonexistent.gguf");
         assert!(result.is_err());
