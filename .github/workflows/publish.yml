@@ -39,6 +39,9 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Update dependencies
+        run: cargo update
+
       - name: Run tests
         run: cargo test --verbose
 

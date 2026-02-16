@@ -1,6 +1,6 @@
 [package]
 name = "gguf-rs"
-version = "0.1.5"
+version = "0.1.6"
 description = "GGUF file parser"
 edition = "2024"
 license = "MIT"
@@ -9,6 +9,7 @@ keywords = ["gguf", "parser", "GPT", "llama", "llm"]
 repository = "https://github.com/zackshen/gguf"
 homepage = "https://github.com/zackshen/gguf"
 include = ["src/**/*", "README.md"]
+categories = ["parser-implementations", "science"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,7 +21,7 @@ comfy-table = "7.1.4"
 log = "0.4.27"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.140", features = ["arbitrary_precision"] }
-simple_logger = "5.0.0"
+simple_logger = "5.0.1"
 
 
 [features]

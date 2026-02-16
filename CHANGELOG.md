@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-02-16
+
+### Security
+
+- Fix time crate vulnerability (CVE-2026-25727, GHSA-r6v5-fh4h-64xc)
+
+### Dependencies
+
+- Update simple_logger from 5.0.0 to 5.0.1
+- Update time dependency to 0.3.47 or later (via cargo update)
+
+### Miscellaneous Tasks
+
+- Update CHANGELOG.md
+- Release gguf-rs version 0.1.6
+
 ## [0.1.5] - 2025-12-06
 
 ### Features
