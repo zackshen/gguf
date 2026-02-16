@@ -2,7 +2,7 @@
 name = "gguf-rs"
 version = "0.1.7"
 description = "GGUF file parser"
-edition = "2024"
+edition = "2021"
 license = "MIT"
 authors = ["Zack Shen <zackshen0526@gmail.com>"]
 keywords = ["gguf", "parser", "GPT", "llama", "llm"]
