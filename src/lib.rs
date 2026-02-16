@@ -314,6 +314,7 @@ impl TryFrom<u32> for MetadataValueType {
 
 /// GGML type of a tensor in the GGUF file.
 #[derive(Debug, Serialize)]
+#[allow(non_camel_case_types)]
 pub enum GGMLType {
     F32 = 0,
     F16 = 1,
