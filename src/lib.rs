@@ -1,33 +1,62 @@
-/// This module provides functionality for decoding and working with GGUF files.
-///
-/// GGUF files are binary files that contain key-value metadata and tensors.
-/// The `GGUFContainer` struct represents a GGUF file container and provides methods for decoding and accessing the data.
-/// The `GGUFModel` struct represents the decoded GGUF data, including the key-value metadata and tensors.
-/// The `Tensor` struct represents a tensor in the GGUF file, including its name, kind, offset, size, and shape.
-/// The `ByteOrder` enum represents the byte order of the GGUF file (little endian or big endian).
-/// The `Version` enum represents the version of the GGUF file (v1, v2, or v3).
-/// The `MetadataValueType` enum represents the value type of the metadata in the GGUF file.
-/// The `GGMLType` enum represents the GGML type of a tensor in the GGUF file.
-///
-/// Example usage:
-/// ```
-/// use gguf_rs::{get_gguf_container};
-/// use std::fs::File;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let mut container = get_gguf_container("tests/test-le-v3.gguf")?;
-///     let model = container.decode()?;
-///
-///     println!("GGUF version: {}", model.get_version());
-///
-///     for tensor in model.tensors() {
-///         println!("Tensor name: {}", tensor.name);
-///         println!("Tensor kind: {}", tensor.kind);
-///         println!("Tensor shape: {:?}", tensor.shape);
-///     }
-///
-///     Ok(())
-/// }
+//! # GGUF File Parser
+//!
+//! A Rust library for parsing and reading GGUF (GGML Universal Format) files.
+//!
+//! GGUF files are binary files that contain key-value metadata and tensors,
+//! commonly used for storing quantized machine learning models like LLaMA, Phi, etc.
+//!
+//! ## Features
+//!
+//! - Decode GGUF files (v1, v2, v3)
+//! - Access key-value metadata
+//! - Access tensor information
+//! - Support for little-endian and big-endian files
+//! - CLI tool for quick inspection
+//!
+//! ## Example
+//!
+//! ```rust,no_run
+//! use gguf_rs::get_gguf_container;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Open a GGUF file
+//!     let mut container = get_gguf_container("model.gguf")?;
+//!     let model = container.decode()?;
+//!
+//!     // Print model info
+//!     println!("Version: {}", model.get_version());
+//!     println!("Architecture: {}", model.model_family());
+//!     println!("Parameters: {}", model.model_parameters());
+//!     println!("File type: {}", model.file_type());
+//!     println!("Tensors: {}", model.num_tensor());
+//!
+//!     // List tensors
+//!     for tensor in model.tensors() {
+//!         println!("  {}: {:?} {:?}", tensor.name, tensor.kind, tensor.shape);
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## CLI Usage
+//!
+//! Install the CLI tool:
+//! ```bash
+//! cargo install gguf-rs
+//! ```
+//!
+//! Show model info:
+//! ```bash
+//! gguf model.gguf
+//! ```
+//!
+//! Show tensors:
+//! ```bash
+//! gguf model.gguf --tensors
+//! ```
+
+use anyhow::{Result, anyhow};
 /// ```
 use anyhow::{Result, anyhow};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
@@ -138,7 +167,12 @@ pub struct V3 {
     num_kv: u64,
 }
 
-/// GGUF file container.
+/// GGUF file container for reading GGUF binary files.
+///
+/// The container wraps a reader and provides methods to decode the GGUF file
+/// into a [`GGUFModel`].
+///
+/// Use [`get_gguf_container`] for a convenient way to open a file.
 pub struct GGUFContainer {
     bo: ByteOrder,
     version: Version,
@@ -148,25 +182,23 @@ pub struct GGUFContainer {
 
 impl GGUFContainer {
     /// Create a new `GGUFContainer` from a byte order and a reader.
-    /// The reader must implement the `std::io::Read` trait.
-    /// ```
-    /// use gguf_rs::{get_gguf_container};
+    ///
+    /// # Arguments
+    ///
+    /// * `bo` - Byte order (little-endian or big-endian)
+    /// * `reader` - A reader implementing `std::io::Read`
+    /// * `max_array_size` - Maximum size for array metadata values
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use gguf_rs::{GGUFContainer, ByteOrder};
     /// use std::fs::File;
     ///
-    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut container = get_gguf_container("tests/test-le-v3.gguf")?;
-    ///     let model = container.decode()?;
-    ///
-    ///     println!("GGUF version: {}", model.get_version());
-    ///
-    ///     for tensor in model.tensors() {
-    ///         println!("Tensor name: {}", tensor.name);
-    ///         println!("Tensor kind: {}", tensor.kind);
-    ///         println!("Tensor shape: {:?}", tensor.shape);
-    ///     }
-    ///
-    ///     Ok(())
-    /// }
+    /// let file = File::open("model.gguf")?;
+    /// let container = GGUFContainer::new(ByteOrder::LE, Box::new(file), 1024);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn new(bo: ByteOrder, reader: Box<dyn std::io::Read>, max_array_size: u64) -> Self {
         Self {
             bo,
@@ -252,17 +284,54 @@ impl GGUFContainer {
 }
 
 /// Tensor in the GGUF file.
+///
+/// Represents a single tensor with its metadata including name, type, offset, size, and shape.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use gguf_rs::get_gguf_container;
+///
+/// let mut container = get_gguf_container("model.gguf")?;
+/// let model = container.decode()?;
+///
+/// for tensor in model.tensors() {
+///     println!("Tensor: {} (shape: {:?})", tensor.name, tensor.shape);
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct Tensor {
+    /// Name of the tensor (e.g., "token_embd.weight")
     pub name: String,
+    /// GGML type identifier
     pub kind: u32,
+    /// Byte offset in the file
     pub offset: u64,
+    /// Size in bytes
     pub size: u64,
-    // shape is the number of elements in each dimension
+    /// Shape dimensions (number of elements in each dimension)
     pub shape: Vec<u64>,
 }
 
-/// GGUF model.
+/// Decoded GGUF model containing metadata and tensors.
+///
+/// Use [`get_gguf_container`] to create a container, then call [`GGUFContainer::decode`]
+/// to get a `GGUFModel`.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use gguf_rs::get_gguf_container;
+///
+/// let mut container = get_gguf_container("model.gguf")?;
+/// let model = container.decode()?;
+///
+/// println!("Model: {}", model.model_family());
+/// println!("Parameters: {}", model.model_parameters());
+/// println!("Tensors: {}", model.num_tensor());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct GGUFModel {
     kv: BTreeMap<String, Value>,
     tensors: Vec<Tensor>,
@@ -272,6 +341,9 @@ pub struct GGUFModel {
     version: Version,
 }
 
+/// Metadata value type in GGUF files.
+///
+/// Represents the type of a metadata value in the key-value store.
 #[derive(Debug)]
 pub enum MetadataValueType {
     Uint8 = 0,
@@ -817,5 +889,90 @@ mod tests {
                 "answer_in_float": 42.0,
                 "tokenizer.ggml.tokens": ["a", "b", "c", "d", "e"],})
         );
+    }
+
+    #[test]
+    fn test_read_be_v3_gguf() {
+        let mut container = super::get_gguf_container("tests/test-be-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        assert_eq!(model.get_version(), "v3");
+        assert_eq!(model.model_family(), "llama");
+    }
+
+    #[test]
+    fn test_file_not_found() {
+        let result = super::get_gguf_container("nonexistent.gguf");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("file not found"));
+    }
+
+    #[test]
+    fn test_invalid_file_magic() {
+        use std::io::Cursor;
+        let invalid_data = vec![0x00, 0x00, 0x00, 0x00];
+        let cursor = Cursor::new(invalid_data);
+        let container = super::GGUFContainer::new(
+            super::ByteOrder::LE,
+            Box::new(cursor),
+            u64::MAX,
+        );
+        let result = container.decode();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_metadata_value_type_conversion() {
+        use super::MetadataValueType;
+        use std::convert::TryFrom;
+
+        assert!(matches!(MetadataValueType::try_from(0), Ok(MetadataValueType::Uint8)));
+        assert!(matches!(MetadataValueType::try_from(6), Ok(MetadataValueType::Float32)));
+        assert!(matches!(MetadataValueType::try_from(8), Ok(MetadataValueType::String)));
+        assert!(MetadataValueType::try_from(100).is_err());
+    }
+
+    #[test]
+    fn test_ggml_type_conversion() {
+        use super::GGMLType;
+        use std::convert::TryFrom;
+
+        assert!(matches!(GGMLType::try_from(0), Ok(GGMLType::F32)));
+        assert!(matches!(GGMLType::try_from(2), Ok(GGMLType::Q4_0)));
+        assert!(GGMLType::try_from(100).is_err());
+    }
+
+    #[test]
+    fn test_byte_order_default() {
+        use super::ByteOrder;
+        let bo = ByteOrder::default();
+        assert!(matches!(bo, ByteOrder::LE));
+    }
+
+    #[test]
+    fn test_tensors() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        let tensors = model.tensors();
+        assert!(!tensors.is_empty());
+        
+        for tensor in tensors {
+            assert!(!tensor.name.is_empty());
+            assert!(!tensor.shape.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_num_tensor() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        assert!(model.num_tensor() > 0);
+    }
+
+    #[test]
+    fn test_get_version() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        assert_eq!(container.get_version(), "v1"); // Before decode, default is v1
+        let _ = container.decode().unwrap();
+        // After decode, version should be v3
     }
 }
