@@ -18,6 +18,7 @@ A Rust library for parsing and reading GGUF (GGML Universal Format) files. GGUF 
 - ✅ Support for little-endian and big-endian files
 - ✅ CLI tool for quick inspection
 - ✅ Zero-copy metadata access
+- ✅ Memory-mapped file support (optional `mmap` feature)
 
 ## Installation
 
@@ -165,6 +166,34 @@ The library has minimal memory overhead:
 - Metadata storage: O(n_kv + n_tensors) where n_kv = number of key-value pairs, n_tensors = number of tensors
 - No tensor data is loaded into memory unless explicitly requested
 
+### Memory-Mapped Files
+
+For large GGUF files (multiple GB), use the `mmap` feature for efficient access:
+
+```toml
+[dependencies]
+gguf-rs = { version = "0.1", features = ["mmap"] }
+```
+
+```rust,no_run
+use gguf_rs::mmap::MmapGGUF;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mmap = MmapGGUF::open("large_model.gguf")?;
+    let model = mmap.decode()?;
+    
+    println!("Architecture: {}", model.model_family());
+    println!("Tensors: {}", model.num_tensor());
+    
+    Ok(())
+}
+```
+
+Benefits of memory mapping:
+- **Lazy loading**: Only accessed pages are loaded into memory
+- **OS-managed paging**: The operating system handles memory management
+- **Fast random access**: Direct pointer access to file data
+
 ## Compatibility
 
 - **Rust version**: Requires Rust 1.56+ (edition 2021)
@@ -177,6 +206,19 @@ The library has minimal memory overhead:
 ```bash
 cargo test
 ```
+
+## Benchmarks
+
+Run performance benchmarks:
+
+```bash
+cargo bench
+```
+
+Benchmarks measure:
+- File parsing performance
+- Metadata access speed
+- Tensor iteration overhead
 
 ## Contributing
 

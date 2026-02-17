@@ -12,6 +12,7 @@
 //! - Access tensor information
 //! - Support for little-endian and big-endian files
 //! - CLI tool for quick inspection
+//! - Optional memory-mapped file support (enable `mmap` feature)
 //!
 //! ## Example
 //!
@@ -54,6 +55,23 @@
 //! Show tensors:
 //! ```bash
 //! gguf model.gguf --tensors
+//! ```
+//!
+//! ## Memory-Mapped Files
+//!
+//! For large files, enable the `mmap` feature for more efficient access:
+//!
+//! ```toml
+//! [dependencies]
+//! gguf-rs = { version = "0.1", features = ["mmap"] }
+//! ```
+//!
+//! ```rust,no_run
+//! use gguf_rs::mmap::MmapGGUF;
+//!
+//! let mmap = MmapGGUF::open("large_model.gguf")?;
+//! let model = mmap.decode()?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use anyhow::{anyhow, Result};
@@ -1277,3 +1295,7 @@ mod tests {
         }
     }
 }
+
+/// Memory-mapped file support (requires `mmap` feature)
+#[cfg(feature = "mmap")]
+pub mod mmap;

@@ -11,8 +11,6 @@ homepage = "https://github.com/zackshen/gguf"
 include = ["src/**/*", "README.md"]
 categories = ["parser-implementations", "science"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = "1.0.101"
 byteorder = "1.5.0"
@@ -23,7 +21,19 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
 simple_logger = "5.0.1"
 
+# Optional dependencies
+memmap2 = { version = "0.9", optional = true }
+tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
+
+[dev-dependencies]
+criterion = "0.5"
 
 [features]
 default = []
 debug = []
+mmap = ["memmap2"]
+async = ["tokio"]
+
+[[bench]]
+name = "parse"
+harness = false
