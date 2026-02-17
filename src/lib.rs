@@ -56,7 +56,7 @@
 //! gguf model.gguf --tensors
 //! ```
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 #[cfg(feature = "debug")]
 use log::debug;
@@ -902,11 +902,8 @@ mod tests {
         use std::io::Cursor;
         let invalid_data = vec![0x00, 0x00, 0x00, 0x00];
         let cursor = Cursor::new(invalid_data);
-        let mut container = super::GGUFContainer::new(
-            super::ByteOrder::LE,
-            Box::new(cursor),
-            u64::MAX,
-        );
+        let mut container =
+            super::GGUFContainer::new(super::ByteOrder::LE, Box::new(cursor), u64::MAX);
         let result = container.decode();
         assert!(result.is_err());
     }
