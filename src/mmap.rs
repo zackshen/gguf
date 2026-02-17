@@ -28,15 +28,16 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
 
-use crate::{ByteOrder, GGUFContainer, GGUFModel, FILE_MAGIC_GGUF_BE, FILE_MAGIC_GGUF_LE};
+use crate::{ByteOrder, GGUFModel, FILE_MAGIC_GGUF_BE, FILE_MAGIC_GGUF_LE};
 
 /// Memory-mapped GGUF file
 ///
 /// Provides efficient access to GGUF files using memory mapping.
 /// The file is not loaded into memory until specific regions are accessed.
 pub struct MmapGGUF {
+    #[allow(dead_code)]
     mmap: Mmap,
-    byte_order: ByteOrder,
+    model: GGUFModel,
 }
 
 impl MmapGGUF {
@@ -84,35 +85,27 @@ impl MmapGGUF {
             _ => return Err(anyhow!("invalid file magic: not a GGUF file")),
         };
 
-        Ok(Self { mmap, byte_order })
+        // Parse the file by copying data (required due to lifetime constraints)
+        // For true zero-copy, a more complex design would be needed
+        let data = mmap[4..].to_vec();
+        let cursor = std::io::Cursor::new(data);
+
+        // Create container and decode
+        let mut container =
+            crate::GGUFContainer::new(byte_order, Box::new(cursor), u64::MAX);
+        let model = container.decode()?;
+
+        Ok(Self { mmap, model })
     }
 
-    /// Decode the GGUF file and return a model
-    ///
-    /// This parses the metadata and tensor information from the memory-mapped file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file contains malformed data.
-    pub fn decode(&self) -> Result<GGUFModel> {
-        // Create a cursor over the mmap data (skip magic, already consumed)
-        let cursor = std::io::Cursor::new(&self.mmap[4..]);
-        let mut container = GGUFContainer::new(self.byte_order.clone(), Box::new(cursor), u64::MAX);
-        container.decode()
+    /// Get the decoded GGUF model
+    pub fn model(&self) -> &GGUFModel {
+        &self.model
     }
 
     /// Get a reference to the raw memory-mapped data
-    ///
-    /// # Safety
-    ///
-    /// The returned slice is valid as long as this `MmapGGUF` is alive.
     pub fn as_slice(&self) -> &[u8] {
         &self.mmap
-    }
-
-    /// Get the byte order of the file
-    pub fn byte_order(&self) -> &ByteOrder {
-        &self.byte_order
     }
 
     /// Get the size of the memory-mapped file
@@ -126,6 +119,15 @@ impl MmapGGUF {
     }
 }
 
+// Implement Deref to allow direct access to GGUFModel methods
+impl std::ops::Deref for MmapGGUF {
+    type Target = GGUFModel;
+
+    fn deref(&self) -> &Self::Target {
+        &self.model
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,15 +136,21 @@ mod tests {
     fn test_mmap_open() {
         let mmap = MmapGGUF::open("tests/test-le-v3.gguf").unwrap();
         assert!(!mmap.is_empty());
-        assert!(matches!(mmap.byte_order(), ByteOrder::LE));
     }
 
     #[test]
     fn test_mmap_decode() {
         let mmap = MmapGGUF::open("tests/test-le-v3.gguf").unwrap();
-        let model = mmap.decode().unwrap();
-        assert_eq!(model.get_version(), "v3");
-        assert_eq!(model.model_family(), "llama");
+        assert_eq!(mmap.model().get_version(), "v3");
+        assert_eq!(mmap.model().model_family(), "llama");
+    }
+
+    #[test]
+    fn test_mmap_deref() {
+        let mmap = MmapGGUF::open("tests/test-le-v3.gguf").unwrap();
+        // Test Deref allows direct access to model methods
+        assert_eq!(mmap.get_version(), "v3");
+        assert_eq!(mmap.model_family(), "llama");
     }
 
     #[test]
