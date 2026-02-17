@@ -25,8 +25,11 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate coverage
+      - name: Generate coverage report
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      - name: Print coverage summary
+        run: cargo llvm-cov --all-features --workspace --summary-only
 
       - name: Upload to codecov
         uses: codecov/codecov-action@v4
