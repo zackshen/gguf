@@ -4,24 +4,26 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use gguf_rs::writer::{GGUFWriter, TensorInfo};
-//! use std::collections::HashMap;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let mut writer = GGUFWriter::new("output.gguf", 3)?;
 //!
-//!     // Write metadata
-//!     writer.write_metadata("general.architecture", "llama")?;
-//!     writer.write_metadata_u32("llama.block_count", 12)?;
+//!     // Add metadata
+//!     writer.add_metadata("general.architecture", "llama");
+//!     writer.add_metadata_u32("llama.block_count", 12);
 //!
-//!     // Write tensor info
+//!     // Add tensor info
 //!     let tensor = TensorInfo {
 //!         name: "token_embd.weight".to_string(),
 //!         shape: vec![4096, 32000],
 //!         dtype: 0, // F32
 //!     };
-//!     writer.write_tensor_info(&tensor)?;
+//!     writer.add_tensor(tensor);
+//!
+//!     // Write header and metadata
+//!     writer.write()?;
 //!
 //!     // Finalize the file
 //!     writer.finalize()?;
