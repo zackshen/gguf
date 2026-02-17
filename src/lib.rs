@@ -73,6 +73,28 @@
 //! let model = mmap.decode()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! ## Async I/O
+//!
+//! For async applications, enable the `async` feature:
+//!
+//! ```toml
+//! [dependencies]
+//! gguf-rs = { version = "0.1", features = ["async"] }
+//! ```
+//!
+//! ```rust,ignore
+//! use gguf_rs::async_io::AsyncGGUF;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut container = AsyncGGUF::open("model.gguf").await?;
+//!     let model = container.decode().await?;
+//!
+//!     println!("Architecture: {}", model.model_family());
+//!     Ok(())
+//! }
+//! ```
 
 use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
@@ -1299,3 +1321,7 @@ mod tests {
 /// Memory-mapped file support (requires `mmap` feature)
 #[cfg(feature = "mmap")]
 pub mod mmap;
+
+/// Async I/O support (requires `async` feature)
+#[cfg(feature = "async")]
+pub mod async_io;

@@ -44,11 +44,12 @@
 
 ---
 
-## Phase 4: Features ⏳ 部分完成
+## Phase 4: Features ⏳ 进行中 (66%)
 
-### 4.1 性能优化
+### 4.1 性能优化 ✅ 完成
 - [x] 添加 benchmarks (criterion)
 - [x] 添加 mmap 支持 (memmap2, 可选 feature)
+- [x] CI workflow 运行 benchmarks
 
 ### 4.2 功能扩展
 - [ ] 异步支持 (tokio 依赖已添加，待实现)
@@ -60,17 +61,17 @@
 
 | Phase | 项目 | 状态 |
 |-------|------|------|
-| 1 | 测试 10 → 28，覆盖率 58.9% | ✅ |
-| 1 | Dependabot 配置 + 4 PR 合并 | ✅ |
-| 1 | 安全漏洞清零 | ✅ |
-| 2 | API 文档增强 | ✅ |
-| 2 | README 增强 | ✅ |
-| 3 | Coverage CI + 日志输出 | ✅ |
-| 3 | Security Audit CI | ✅ |
-| 4 | Benchmarks (criterion) | ✅ |
-| 4 | mmap 支持 (memmap2) | ✅ |
-| 4 | 异步支持 (tokio) | 🔲 |
-| 4 | 写入功能 | 🔲 |
+| **1** | 测试 10 → 28，覆盖率 58.9% | ✅ |
+| **1** | Dependabot 配置 + 4 PR 合并 | ✅ |
+| **1** | 安全漏洞清零 | ✅ |
+| **2** | API 文档增强 | ✅ |
+| **2** | README 增强 | ✅ |
+| **3** | Coverage CI + 日志输出 | ✅ |
+| **3** | Security Audit CI | ✅ |
+| **4** | Benchmarks (criterion) | ✅ |
+| **4** | mmap 支持 (memmap2) | ✅ |
+| **4** | 异步支持 (tokio) | 🔲 |
+| **4** | 写入功能 | 🔲 |
 
 ## 待处理
 

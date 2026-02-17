@@ -19,6 +19,7 @@ A Rust library for parsing and reading GGUF (GGML Universal Format) files. GGUF 
 - ✅ CLI tool for quick inspection
 - ✅ Zero-copy metadata access
 - ✅ Memory-mapped file support (optional `mmap` feature)
+- ✅ Async I/O support (optional `async` feature)
 
 ## Installation
 
@@ -193,6 +194,30 @@ Benefits of memory mapping:
 - **Lazy loading**: Only accessed pages are loaded into memory
 - **OS-managed paging**: The operating system handles memory management
 - **Fast random access**: Direct pointer access to file data
+
+### Async I/O
+
+For async applications, enable the `async` feature:
+
+```toml
+[dependencies]
+gguf-rs = { version = "0.1", features = ["async"] }
+```
+
+```rust,no_run
+use gguf_rs::async_io::AsyncGGUF;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut container = AsyncGGUF::open("model.gguf").await?;
+    let model = container.decode().await?;
+
+    println!("Architecture: {}", model.model_family());
+    println!("Tensors: {}", model.num_tensor());
+
+    Ok(())
+}
+```
 
 ## Compatibility
 
