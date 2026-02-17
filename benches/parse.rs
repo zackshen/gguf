@@ -9,8 +9,7 @@ use gguf_rs::{get_gguf_container, get_gguf_container_array_size};
 fn bench_parse_small(c: &mut Criterion) {
     c.bench_function("parse_small_file", |b| {
         b.iter(|| {
-            let mut container =
-                get_gguf_container(black_box("tests/test-le-v3.gguf")).unwrap();
+            let mut container = get_gguf_container(black_box("tests/test-le-v3.gguf")).unwrap();
             black_box(container.decode().unwrap())
         })
     });

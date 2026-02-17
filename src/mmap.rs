@@ -63,7 +63,7 @@ impl MmapGGUF {
     /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        
+
         if !path.exists() {
             return Err(anyhow!("file not found: {}", path.display()));
         }
@@ -77,7 +77,7 @@ impl MmapGGUF {
         }
 
         let magic = i32::from_le_bytes([mmap[0], mmap[1], mmap[2], mmap[3]]);
-        
+
         let byte_order = match magic {
             FILE_MAGIC_GGUF_LE => ByteOrder::LE,
             FILE_MAGIC_GGUF_BE => ByteOrder::BE,
