@@ -235,7 +235,9 @@ impl GGUFWriter {
     }
 
     fn write_metadata_section(&mut self) -> Result<()> {
-        for (key, value) in &self.metadata {
+        // Collect to avoid borrow conflicts
+        let items: Vec<_> = self.metadata.iter().collect();
+        for (key, value) in items {
             // Write key
             self.write_string(key)?;
             // Write value type and value
@@ -309,7 +311,9 @@ impl GGUFWriter {
     }
 
     fn write_tensor_info_section(&mut self) -> Result<()> {
-        for tensor in &self.tensors {
+        // Clone to avoid borrow conflicts
+        let tensors = self.tensors.clone();
+        for tensor in &tensors {
             // Name
             self.write_string(&tensor.name)?;
             // Number of dimensions
