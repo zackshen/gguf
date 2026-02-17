@@ -91,8 +91,7 @@ impl MmapGGUF {
         let cursor = std::io::Cursor::new(data);
 
         // Create container and decode
-        let mut container =
-            crate::GGUFContainer::new(byte_order, Box::new(cursor), u64::MAX);
+        let mut container = crate::GGUFContainer::new(byte_order, Box::new(cursor), u64::MAX);
         let model = container.decode()?;
 
         Ok(Self { mmap, model })
