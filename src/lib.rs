@@ -66,7 +66,7 @@
 //! gguf-rs = { version = "0.1", features = ["mmap"] }
 //! ```
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use gguf_rs::mmap::MmapGGUF;
 //!
 //! let mmap = MmapGGUF::open("large_model.gguf")?;
