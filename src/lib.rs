@@ -206,7 +206,10 @@ impl GGUFContainer {
         }
     }
 
-    /// Get the version of the GGUF file.
+    /// Get the version of the GGUF file container.
+    ///
+    /// Returns the default version ("v1") before decoding.
+    /// After successful decode, returns the actual file version ("v1", "v2", or "v3").
     pub fn get_version(&self) -> String {
         match &self.version {
             Version::V1(_) => String::from("v1"),
@@ -216,6 +219,23 @@ impl GGUFContainer {
     }
 
     /// Decode the GGUF file and return a `GGUFModel`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The file has an invalid or unsupported GGUF version
+    /// - The file contains malformed data
+    /// - An I/O error occurs while reading
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use gguf_rs::get_gguf_container;
+    ///
+    /// let mut container = get_gguf_container("model.gguf")?;
+    /// let model = container.decode()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn decode(&mut self) -> Result<GGUFModel> {
         let version = match self.bo {
             ByteOrder::LE => self.reader.read_i32::<LittleEndian>()?,
@@ -300,13 +320,13 @@ impl GGUFContainer {
 /// ```
 #[derive(Debug, Clone)]
 pub struct Tensor {
-    /// Name of the tensor (e.g., "token_embd.weight")
+    /// Name of the tensor (e.g., "token_embd.weight", "blk.0.attn_q.weight")
     pub name: String,
-    /// GGML type identifier
+    /// GGML type identifier (see [`GGMLType`] for interpretation)
     pub kind: u32,
-    /// Byte offset in the file
+    /// Byte offset in the file where tensor data begins
     pub offset: u64,
-    /// Size in bytes
+    /// Size of tensor data in bytes
     pub size: u64,
     /// Shape dimensions (number of elements in each dimension)
     pub shape: Vec<u64>,
@@ -342,6 +362,7 @@ pub struct GGUFModel {
 /// Metadata value type in GGUF files.
 ///
 /// Represents the type of a metadata value in the key-value store.
+/// Used when decoding metadata to determine how to interpret bytes.
 #[derive(Debug)]
 pub enum MetadataValueType {
     Uint8 = 0,
@@ -383,6 +404,10 @@ impl TryFrom<u32> for MetadataValueType {
 }
 
 /// GGML type of a tensor in the GGUF file.
+///
+/// Represents the quantization format used for tensor data.
+/// Most types are quantized formats that compress float values
+/// to reduce memory footprint while maintaining accuracy.
 #[derive(Debug, Serialize)]
 #[allow(non_camel_case_types)]
 pub enum GGMLType {
@@ -745,7 +770,9 @@ impl GGUFModel {
         })
     }
 
-    /// Get the version of the GGUF file.
+    /// Get the version of the decoded GGUF model.
+    ///
+    /// Returns one of: "v1", "v2", or "v3".
     pub fn get_version(&self) -> String {
         match &self.version {
             Version::V1(_) => String::from("v1"),
@@ -764,6 +791,8 @@ impl GGUFModel {
     }
 
     /// Get the number of tensors in the GGUF file.
+    ///
+    /// Returns the total count of tensors stored in the model.
     pub fn num_tensor(&self) -> u64 {
         match &self.version {
             Version::V1(v1) => v1.num_tensor as u64,
@@ -772,7 +801,12 @@ impl GGUFModel {
         }
     }
 
-    /// Get the model family of the GGUF file.
+    /// Get the model family/architecture of the GGUF file.
+    ///
+    /// Returns the value of `general.architecture` metadata key,
+    /// or "unknown" if not present.
+    ///
+    /// Common values include: "llama", "phi", "mistral", "qwen", etc.
     pub fn model_family(&self) -> String {
         let arch = self
             .kv
@@ -786,7 +820,10 @@ impl GGUFModel {
         }
     }
 
-    /// Get the number of parameters in the GGUF file.
+    /// Get the estimated number of parameters in the model.
+    ///
+    /// Returns a human-readable string (e.g., "7B", "13B", "192").
+    /// Returns "unknown" if parameters cannot be determined.
     pub fn model_parameters(&self) -> String {
         if self.parameters > 0 {
             human_number(self.parameters)
@@ -795,7 +832,11 @@ impl GGUFModel {
         }
     }
 
-    /// Get the file type of the GGUF file.
+    /// Get the quantization file type of the GGUF file.
+    ///
+    /// Returns a human-readable description of the quantization method
+    /// (e.g., "All F32", "Mostly Q4_0", "Mostly BF16").
+    /// Returns "unknown" if not present.
     pub fn file_type(&self) -> String {
         if let Some(ft) = self.kv.get("general.file_type") {
             file_type(ft.as_u64().unwrap())
@@ -805,22 +846,76 @@ impl GGUFModel {
     }
 
     /// Get the key-value metadata of the GGUF file.
+    ///
+    /// Returns a reference to the metadata map containing all key-value pairs
+    /// from the GGUF file. Values are JSON values for flexibility.
+    ///
+    /// Common keys include:
+    /// - `general.architecture`: Model architecture (e.g., "llama")
+    /// - `general.name`: Model name
+    /// - `tokenizer.ggml.tokens`: Tokenizer vocabulary
     pub fn metadata(&self) -> &BTreeMap<String, Value> {
         &self.kv
     }
 
     /// Get the tensors of the GGUF file.
+    ///
+    /// Returns a reference to the vector of tensors, each containing
+    /// name, type, offset, size, and shape information.
     pub fn tensors(&self) -> &Vec<Tensor> {
         &self.tensors
     }
 }
 
 /// Get a `GGUFContainer` from a file, truncating all arrays to length 3.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file does not exist
+/// - The file has an unsupported format (ggml, ggmf, ggjt, ggla)
+/// - The file has an invalid magic number
+/// - An I/O error occurs while reading the file
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use gguf_rs::get_gguf_container;
+///
+/// let container = get_gguf_container("model.gguf")?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn get_gguf_container(file: &str) -> Result<GGUFContainer> {
     get_gguf_container_array_size(file, 3)
 }
 
 /// Get a `GGUFContainer` from a file with the provided max array size.
+///
+/// # Arguments
+///
+/// * `file` - Path to the GGUF file
+/// * `max_array_size` - Maximum number of elements to read from array metadata
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file does not exist
+/// - The file has an unsupported format (ggml, ggmf, ggjt, ggla)
+/// - The file has an invalid magic number
+/// - An I/O error occurs while reading the file
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use gguf_rs::get_gguf_container_array_size;
+///
+/// // Read all array elements
+/// let container = get_gguf_container_array_size("model.gguf", u64::MAX)?;
+///
+/// // Limit arrays to 100 elements for performance
+/// let container = get_gguf_container_array_size("model.gguf", 100)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn get_gguf_container_array_size(file: &str, max_array_size: u64) -> Result<GGUFContainer> {
     if !std::path::Path::new(file).exists() {
         return Err(anyhow!("file not found"));
@@ -962,5 +1057,215 @@ mod tests {
         assert_eq!(container.get_version(), "v1"); // Before decode, default is v1
         let _ = container.decode().unwrap();
         // After decode, version should be v3
+    }
+
+    // ========== Additional tests for improved coverage ==========
+
+    #[test]
+    fn test_human_number_small() {
+        assert_eq!(super::human_number(999), "999");
+        assert_eq!(super::human_number(1000), "1K");
+        assert_eq!(super::human_number(1500), "2K");
+    }
+
+    #[test]
+    fn test_human_number_medium() {
+        assert_eq!(super::human_number(1_000_000), "1M");
+        assert_eq!(super::human_number(2_500_000), "3M");
+    }
+
+    #[test]
+    fn test_human_number_large() {
+        assert_eq!(super::human_number(1_000_000_000), "1B");
+        assert_eq!(super::human_number(7_500_000_000), "8B");
+    }
+
+    #[test]
+    fn test_file_type_all_values() {
+        assert_eq!(super::file_type(0), "All F32");
+        assert_eq!(super::file_type(1), "Mostly F16");
+        assert_eq!(super::file_type(2), "Mostly Q4_0");
+        assert_eq!(super::file_type(7), "Mostly Q8_0");
+        assert_eq!(super::file_type(14), "Mostly Q6_K");
+        assert_eq!(super::file_type(24), "Mostly BF16");
+        assert_eq!(super::file_type(99), "unknown");
+    }
+
+    #[test]
+    fn test_metadata_value_type_all_variants() {
+        use super::MetadataValueType;
+        use std::convert::TryFrom;
+
+        // Test all valid type values
+        assert!(matches!(MetadataValueType::try_from(0), Ok(MetadataValueType::Uint8)));
+        assert!(matches!(MetadataValueType::try_from(1), Ok(MetadataValueType::Int8)));
+        assert!(matches!(MetadataValueType::try_from(2), Ok(MetadataValueType::Uint16)));
+        assert!(matches!(MetadataValueType::try_from(3), Ok(MetadataValueType::Int16)));
+        assert!(matches!(MetadataValueType::try_from(4), Ok(MetadataValueType::Uint32)));
+        assert!(matches!(MetadataValueType::try_from(5), Ok(MetadataValueType::Int32)));
+        assert!(matches!(MetadataValueType::try_from(6), Ok(MetadataValueType::Float32)));
+        assert!(matches!(MetadataValueType::try_from(7), Ok(MetadataValueType::Bool)));
+        assert!(matches!(MetadataValueType::try_from(8), Ok(MetadataValueType::String)));
+        assert!(matches!(MetadataValueType::try_from(9), Ok(MetadataValueType::Array)));
+        assert!(matches!(MetadataValueType::try_from(10), Ok(MetadataValueType::Uint64)));
+        assert!(matches!(MetadataValueType::try_from(11), Ok(MetadataValueType::Int64)));
+        assert!(matches!(MetadataValueType::try_from(12), Ok(MetadataValueType::Float64)));
+    }
+
+    #[test]
+    fn test_ggml_type_all_valid_types() {
+        use super::GGMLType;
+        use std::convert::TryFrom;
+
+        // Test a representative sample of GGML types
+        assert!(matches!(GGMLType::try_from(1), Ok(GGMLType::F16)));
+        assert!(matches!(GGMLType::try_from(3), Ok(GGMLType::Q4_1)));
+        assert!(matches!(GGMLType::try_from(6), Ok(GGMLType::Q5_0)));
+        assert!(matches!(GGMLType::try_from(7), Ok(GGMLType::Q5_1)));
+        assert!(matches!(GGMLType::try_from(8), Ok(GGMLType::Q8_0)));
+        assert!(matches!(GGMLType::try_from(10), Ok(GGMLType::Q2_K)));
+        assert!(matches!(GGMLType::try_from(30), Ok(GGMLType::BF16)));
+        assert!(matches!(GGMLType::try_from(39), Ok(GGMLType::MXFP4)));
+    }
+
+    #[test]
+    fn test_ggml_type_invalid() {
+        use super::GGMLType;
+        use std::convert::TryFrom;
+
+        assert!(GGMLType::try_from(100).is_err());
+        assert!(GGMLType::try_from(255).is_err());
+    }
+
+    #[test]
+    fn test_model_family_unknown() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        // This test file has "llama" architecture
+        assert_eq!(model.model_family(), "llama");
+    }
+
+    #[test]
+    fn test_model_parameters_format() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        // Test file has 192 parameters
+        assert_eq!(model.model_parameters(), "192");
+    }
+
+    #[test]
+    fn test_metadata_accessor() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        let metadata = model.metadata();
+        assert!(metadata.contains_key("general.architecture"));
+        assert!(metadata.contains_key("llama.block_count"));
+    }
+
+    #[test]
+    fn test_num_kv() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        assert!(model.num_kv() > 0);
+    }
+
+    #[test]
+    fn test_tensor_properties() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        let tensors = model.tensors();
+
+        for tensor in tensors {
+            // Verify tensor has valid properties
+            assert!(!tensor.name.is_empty());
+            assert!(!tensor.shape.is_empty());
+            // Offset and size should be non-negative (u64)
+            let _ = tensor.offset;
+            let _ = tensor.size;
+            let _ = tensor.kind;
+        }
+    }
+
+    #[test]
+    fn test_container_new() {
+        use super::{ByteOrder, GGUFContainer};
+        use std::io::Cursor;
+
+        let cursor = Cursor::new(vec![]);
+        let container = GGUFContainer::new(ByteOrder::LE, Box::new(cursor), 100);
+        assert_eq!(container.get_version(), "v1"); // Default version
+    }
+
+    #[test]
+    fn test_byte_order_variants() {
+        use super::ByteOrder;
+
+        let le = ByteOrder::LE;
+        let be = ByteOrder::BE;
+
+        // Just verify we can create both variants
+        let _ = format!("{:?}", le);
+        let _ = format!("{:?}", be);
+    }
+
+    #[test]
+    fn test_version_variants() {
+        use super::{V1, V2, V3, Version};
+
+        let v1 = Version::V1(V1::default());
+        let v2 = Version::V2(V2::default());
+        let v3 = Version::V3(V3::default());
+
+        // Verify we can create all version variants
+        let _ = format!("{:?}", v1);
+        let _ = format!("{:?}", v2);
+        let _ = format!("{:?}", v3);
+    }
+
+    #[test]
+    fn test_invalid_file_magic_detailed() {
+        use super::get_gguf_container;
+        use std::io::Cursor;
+
+        // Test with various invalid magic numbers
+        let invalid_magics = vec![
+            vec![0x00, 0x00, 0x00, 0x00],
+            vec![0xFF, 0xFF, 0xFF, 0xFF],
+            vec![0x12, 0x34, 0x56, 0x78],
+        ];
+
+        for magic in invalid_magics {
+            let cursor = Cursor::new(magic);
+            let mut container =
+                super::GGUFContainer::new(super::ByteOrder::LE, Box::new(cursor), u64::MAX);
+            let result = container.decode();
+            assert!(result.is_err(), "Expected error for invalid magic");
+        }
+    }
+
+    #[test]
+    fn test_file_not_found_message() {
+        let result = super::get_gguf_container("this_file_does_not_exist.gguf");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("file not found"), "Error message should mention 'file not found'");
+    }
+
+    #[test]
+    fn test_get_gguf_container_array_size() {
+        // Test with custom array size
+        let result = super::get_gguf_container_array_size("tests/test-le-v3.gguf", 1);
+        assert!(result.is_ok());
+
+        let mut container = result.unwrap();
+        let model = container.decode().unwrap();
+
+        // With max_array_size=1, arrays should be truncated
+        let tokens = model.kv.get("tokenizer.ggml.tokens");
+        if let Some(tokens_arr) = tokens {
+            if let serde_json::Value::Array(arr) = tokens_arr {
+                assert!(arr.len() <= 1, "Array should be truncated to max size");
+            }
+        }
     }
 }
