@@ -1073,7 +1073,8 @@ mod tests {
     fn test_human_number_medium() {
         assert_eq!(super::human_number(1_000_000), "1000K");
         assert_eq!(super::human_number(1_000_001), "1M");
-        assert_eq!(super::human_number(2_500_000), "3M");
+        assert_eq!(super::human_number(2_000_001), "2M");
+        assert_eq!(super::human_number(3_500_000), "4M");
     }
 
     #[test]
