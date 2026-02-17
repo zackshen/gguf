@@ -1224,7 +1224,6 @@ mod tests {
 
     #[test]
     fn test_invalid_file_magic_detailed() {
-        use super::get_gguf_container;
         use std::io::Cursor;
 
         // Test with various invalid magic numbers
@@ -1247,8 +1246,10 @@ mod tests {
     fn test_file_not_found_message() {
         let result = super::get_gguf_container("this_file_does_not_exist.gguf");
         assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("file not found"), "Error message should mention 'file not found'");
+        // Check error message
+        if let Err(err) = result {
+            assert!(err.to_string().contains("file not found"), "Error message should mention 'file not found'");
+        }
     }
 
     #[test]
