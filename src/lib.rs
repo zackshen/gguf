@@ -1325,3 +1325,6 @@ pub mod mmap;
 /// Async I/O support (requires `async` feature)
 #[cfg(feature = "async")]
 pub mod async_io;
+
+/// GGUF file writing support
+pub mod writer;

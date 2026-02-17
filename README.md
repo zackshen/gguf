@@ -20,6 +20,7 @@ A Rust library for parsing and reading GGUF (GGML Universal Format) files. GGUF 
 - ✅ Zero-copy metadata access
 - ✅ Memory-mapped file support (optional `mmap` feature)
 - ✅ Async I/O support (optional `async` feature)
+- ✅ Write GGUF files
 
 ## Installation
 
@@ -214,6 +215,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Architecture: {}", model.model_family());
     println!("Tensors: {}", model.num_tensor());
+
+    Ok(())
+}
+```
+
+### Writing GGUF Files
+
+Create and write GGUF files:
+
+```rust,no_run
+use gguf_rs::writer::{GGUFWriter, TensorInfo};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create writer for GGUF v3
+    let mut writer = GGUFWriter::new("output.gguf", 3)?;
+
+    // Add metadata
+    writer.add_metadata("general.architecture", "llama");
+    writer.add_metadata_u32("llama.block_count", 12);
+    writer.add_metadata_f32("test.value", 3.14);
+
+    // Add tensor info
+    let tensor = TensorInfo {
+        name: "token_embd.weight".to_string(),
+        shape: vec![4096, 32000],
+        dtype: 0, // F32
+    };
+    writer.add_tensor(tensor);
+
+    // Write header and metadata
+    writer.write()?;
+
+    // Write tensor data
+    let data: Vec<u8> = vec![0; 4096 * 32000 * 4]; // F32 = 4 bytes
+    writer.write_tensor_data(0, &data)?;
+
+    // Finalize
+    writer.finalize()?;
 
     Ok(())
 }

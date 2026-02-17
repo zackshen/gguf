@@ -44,16 +44,16 @@
 
 ---
 
-## Phase 4: Features ⏳ 进行中 (66%)
+## Phase 4: Features ✅ 完成
 
-### 4.1 性能优化 ✅ 完成
+### 4.1 性能优化
 - [x] 添加 benchmarks (criterion)
 - [x] 添加 mmap 支持 (memmap2, 可选 feature)
 - [x] CI workflow 运行 benchmarks
 
 ### 4.2 功能扩展
-- [ ] 异步支持 (tokio 依赖已添加，待实现)
-- [ ] 写入功能
+- [x] 异步支持 (tokio)
+- [x] 写入功能 (writer 模块)
 
 ---
 
@@ -70,17 +70,17 @@
 | **3** | Security Audit CI | ✅ |
 | **4** | Benchmarks (criterion) | ✅ |
 | **4** | mmap 支持 (memmap2) | ✅ |
-| **4** | 异步支持 (tokio) | 🔲 |
-| **4** | 写入功能 | 🔲 |
+| **4** | 异步支持 (tokio) | ✅ |
+| **4** | 写入功能 (writer) | ✅ |
 
-## 待处理
+## 可选后续
 
 1. 配置 CODECOV_TOKEN secret 以激活覆盖率 badge
-2. Phase 4.2: 异步支持（tokio 已添加依赖）
-3. Phase 4.2: 写入功能
+2. 添加更多 GGML 类型支持
+3. 添加 tensor 数据压缩支持
 
 ---
 
 *Created: 2026-02-16*
 *Updated: 2026-02-17*
-*Status: Phase 1-3 完成, Phase 4 进行中 (66%)*
+*Status: Phase 1-4 全部完成 ✅*
