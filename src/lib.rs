@@ -1037,7 +1037,7 @@ mod tests {
         let model = container.decode().unwrap();
         let tensors = model.tensors();
         assert!(!tensors.is_empty());
-        
+
         for tensor in tensors {
             assert!(!tensor.name.is_empty());
             assert!(!tensor.shape.is_empty());
