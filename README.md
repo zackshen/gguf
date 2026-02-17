@@ -4,6 +4,7 @@
 [![Documentation](https://docs.rs/gguf-rs/badge.svg)](https://docs.rs/gguf-rs)
 [![License](https://img.shields.io/crates/l/gguf-rs.svg)](https://github.com/zackshen/gguf/blob/main/LICENSE)
 ![Unit test](https://github.com/zackshen/gguf/actions/workflows/test.yml/badge.svg)
+![Security Audit](https://github.com/zackshen/gguf/actions/workflows/audit.yml/badge.svg)
 ![Publish](https://github.com/zackshen/gguf/actions/workflows/publish.yml/badge.svg)
 
 A Rust library for parsing and reading GGUF (GGML Universal Format) files. GGUF files are binary files that contain key-value metadata and tensors, commonly used for storing quantized machine learning models.
