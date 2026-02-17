@@ -113,8 +113,11 @@ impl AsyncGGUF {
         self.reader.read_to_end(&mut all_data).await?;
 
         let cursor = std::io::Cursor::new(all_data);
-        let mut container =
-            crate::GGUFContainer::new(self.byte_order.clone(), Box::new(cursor), self.max_array_size);
+        let mut container = crate::GGUFContainer::new(
+            self.byte_order.clone(),
+            Box::new(cursor),
+            self.max_array_size,
+        );
         container.decode()
     }
 }
@@ -156,7 +159,9 @@ pub async fn read_gguf_with_array_size<P: AsRef<std::path::Path>>(
     path: P,
     max_array_size: u64,
 ) -> Result<GGUFModel> {
-    let mut container = AsyncGGUF::open(path).await?.with_max_array_size(max_array_size);
+    let mut container = AsyncGGUF::open(path)
+        .await?
+        .with_max_array_size(max_array_size);
     container.decode().await
 }
 
