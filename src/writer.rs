@@ -37,7 +37,7 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::{FILE_MAGIC_GGUF_LE, GGUF_VERSION_V3};
+use crate::{FILE_MAGIC_GGUF_LE, GGUF_VERSION_V1, GGUF_VERSION_V2, GGUF_VERSION_V3};
 
 /// Metadata value types for writing
 #[derive(Debug, Clone)]
@@ -235,13 +235,17 @@ impl GGUFWriter {
     }
 
     fn write_metadata_section(&mut self) -> Result<()> {
-        // Collect to avoid borrow conflicts
-        let items: Vec<_> = self.metadata.iter().collect();
+        // Clone all items to avoid borrow conflicts
+        let items: Vec<(String, MetadataValue)> = self
+            .metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         for (key, value) in items {
             // Write key
-            self.write_string(key)?;
+            self.write_string(&key)?;
             // Write value type and value
-            self.write_metadata_value(value)?;
+            self.write_metadata_value(&value)?;
         }
         Ok(())
     }
@@ -339,7 +343,7 @@ impl GGUFWriter {
 
     fn write_size(&mut self, size: u64) -> Result<()> {
         match self.version {
-            crate::GGUF_VERSION_V1 => {
+            GGUF_VERSION_V1 => {
                 self.writer.write_u32::<LittleEndian>(size as u32)?;
             }
             _ => {
