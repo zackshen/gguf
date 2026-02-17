@@ -149,12 +149,14 @@ impl GGUFWriter {
 
     /// Add metadata (bool value)
     pub fn add_metadata_bool(&mut self, key: &str, value: bool) {
-        self.metadata.insert(key.to_string(), MetadataValue::Bool(value));
+        self.metadata
+            .insert(key.to_string(), MetadataValue::Bool(value));
     }
 
     /// Add metadata (array value)
     pub fn add_metadata_array(&mut self, key: &str, value: Vec<MetadataValue>) {
-        self.metadata.insert(key.to_string(), MetadataValue::Array(value));
+        self.metadata
+            .insert(key.to_string(), MetadataValue::Array(value));
     }
 
     /// Add tensor info
@@ -323,7 +325,8 @@ impl GGUFWriter {
             // Name
             self.write_string(&tensor.name)?;
             // Number of dimensions
-            self.writer.write_u32::<LittleEndian>(tensor.shape.len() as u32)?;
+            self.writer
+                .write_u32::<LittleEndian>(tensor.shape.len() as u32)?;
             // Shape
             for dim in &tensor.shape {
                 self.writer.write_u64::<LittleEndian>(*dim)?;
