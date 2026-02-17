@@ -1064,19 +1064,22 @@ mod tests {
     #[test]
     fn test_human_number_small() {
         assert_eq!(super::human_number(999), "999");
-        assert_eq!(super::human_number(1000), "1K");
+        assert_eq!(super::human_number(1000), "1000");
+        assert_eq!(super::human_number(1001), "1K");
         assert_eq!(super::human_number(1500), "2K");
     }
 
     #[test]
     fn test_human_number_medium() {
-        assert_eq!(super::human_number(1_000_000), "1M");
+        assert_eq!(super::human_number(1_000_000), "1000K");
+        assert_eq!(super::human_number(1_000_001), "1M");
         assert_eq!(super::human_number(2_500_000), "3M");
     }
 
     #[test]
     fn test_human_number_large() {
-        assert_eq!(super::human_number(1_000_000_000), "1B");
+        assert_eq!(super::human_number(1_000_000_000), "1000M");
+        assert_eq!(super::human_number(1_000_000_001), "1B");
         assert_eq!(super::human_number(7_500_000_000), "8B");
     }
 
