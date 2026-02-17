@@ -1214,7 +1214,7 @@ mod tests {
 
     #[test]
     fn test_version_variants() {
-        use super::{V1, V2, V3, Version};
+        use super::{Version, V1, V2, V3};
 
         let v1 = Version::V1(V1::default());
         let v2 = Version::V2(V2::default());
@@ -1252,7 +1252,10 @@ mod tests {
         assert!(result.is_err());
         // Check error message
         if let Err(err) = result {
-            assert!(err.to_string().contains("file not found"), "Error message should mention 'file not found'");
+            assert!(
+                err.to_string().contains("file not found"),
+                "Error message should mention 'file not found'"
+            );
         }
     }
 
