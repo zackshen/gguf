@@ -32,7 +32,7 @@ jobs:
         run: cargo llvm-cov --all-features --workspace --summary-only
 
       - name: Upload to codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
