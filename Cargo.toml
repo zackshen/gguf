@@ -12,14 +12,14 @@ include = ["src/**/*", "README.md"]
 categories = ["parser-implementations", "science"]
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 byteorder = "1.5.0"
-clap = { version = "4.5.58", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 comfy-table = "7.2.2"
 log = "0.4.27"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
-simple_logger = "5.0.1"
+simple_logger = "5.2.0"
 
 # Optional dependencies
 memmap2 = { version = "0.9", optional = true }
