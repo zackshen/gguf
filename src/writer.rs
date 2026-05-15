@@ -128,17 +128,20 @@ impl GGUFWriter {
 
     /// Add metadata (u32 value)
     pub fn add_metadata_u32(&mut self, key: &str, value: u32) {
-        self.metadata.insert(key.to_string(), MetadataValue::Uint32(value));
+        self.metadata
+            .insert(key.to_string(), MetadataValue::Uint32(value));
     }
 
     /// Add metadata (i32 value)
     pub fn add_metadata_i32(&mut self, key: &str, value: i32) {
-        self.metadata.insert(key.to_string(), MetadataValue::Int32(value));
+        self.metadata
+            .insert(key.to_string(), MetadataValue::Int32(value));
     }
 
     /// Add metadata (u64 value)
     pub fn add_metadata_u64(&mut self, key: &str, value: u64) {
-        self.metadata.insert(key.to_string(), MetadataValue::Uint64(value));
+        self.metadata
+            .insert(key.to_string(), MetadataValue::Uint64(value));
     }
 
     /// Add metadata (f32 value)
