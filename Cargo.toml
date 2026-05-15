@@ -27,6 +27,7 @@ tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
 
 [dev-dependencies]
 criterion = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []

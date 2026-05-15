@@ -70,7 +70,7 @@
 //! use gguf_rs::mmap::MmapGGUF;
 //!
 //! let mmap = MmapGGUF::open("large_model.gguf")?;
-//! let model = mmap.decode()?;
+//! let model = mmap.model();
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!

@@ -10,7 +10,7 @@
 //! use gguf_rs::mmap::MmapGGUF;
 //!
 //! let mmap = MmapGGUF::open("model.gguf")?;
-//! let model = mmap.decode()?;
+//! let model = mmap.model();
 //!
 //! println!("Architecture: {}", model.model_family());
 //! println!("Tensors: {}", model.num_tensor());
