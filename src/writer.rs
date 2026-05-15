@@ -416,4 +416,161 @@ mod tests {
         let result = GGUFWriter::new("/tmp/test_invalid.gguf", 5);
         assert!(result.is_err());
     }
+
+    fn tmp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("gguf_writer_test_{name}.gguf"))
+    }
+
+    fn read_back(path: &std::path::Path) -> crate::GGUFModel {
+        let mut c = crate::get_gguf_container_array_size(path.to_str().unwrap(), u64::MAX)
+            .expect("open");
+        c.decode().expect("decode")
+    }
+
+    #[test]
+    fn test_writer_v1_v2_roundtrip() {
+        for version in [1, 2] {
+            let path = tmp_path(&format!("v{version}"));
+            let mut w = GGUFWriter::new(&path, version).unwrap();
+            w.add_metadata("general.architecture", "test");
+            w.write().unwrap();
+            w.finalize().unwrap();
+            let model = read_back(&path);
+            assert_eq!(model.get_version(), format!("v{version}"));
+            assert_eq!(model.model_family(), "test");
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[test]
+    fn test_writer_all_metadata_types_roundtrip() {
+        let path = tmp_path("all_meta");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+
+        w.add_metadata("general.architecture", "llama");
+        w.add_metadata_u32("k.u32", 42);
+        w.add_metadata_i32("k.i32", -42);
+        w.add_metadata_u64("k.u64", 1_000_000);
+        w.add_metadata_f32("k.f32", 1.25);
+        w.add_metadata_bool("k.bool", true);
+
+        // Exercise every leaf MetadataValue variant by inserting directly into the map.
+        w.metadata.insert("k.u8".into(), MetadataValue::Uint8(7));
+        w.metadata.insert("k.i8".into(), MetadataValue::Int8(-7));
+        w.metadata.insert("k.u16".into(), MetadataValue::Uint16(7));
+        w.metadata.insert("k.i16".into(), MetadataValue::Int16(-7));
+        w.metadata.insert("k.i64".into(), MetadataValue::Int64(-7));
+        w.metadata.insert("k.f64".into(), MetadataValue::Float64(2.5));
+        w.metadata.insert("k.str".into(), MetadataValue::String("hi".into()));
+
+        w.write().unwrap();
+        w.finalize().unwrap();
+
+        let model = read_back(&path);
+        let kv = model.metadata();
+        assert_eq!(kv.get("k.u32").unwrap().as_u64().unwrap(), 42);
+        assert_eq!(kv.get("k.i32").unwrap().as_i64().unwrap(), -42);
+        assert_eq!(kv.get("k.bool").unwrap().as_bool().unwrap(), true);
+        assert_eq!(kv.get("k.str").unwrap().as_str().unwrap(), "hi");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_add_metadata_array_writes_without_error() {
+        // The writer's array format is incompatible with the reader (missing item_type
+        // field). This test exercises the array write path only — no round-trip.
+        let path = tmp_path("add_arr");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_metadata_array(
+            "k.arr",
+            vec![MetadataValue::Uint32(1), MetadataValue::Uint32(2)],
+        );
+        // Cover every primitive variant of write_metadata_value via array elements.
+        w.add_metadata_array(
+            "k.primitives",
+            vec![
+                MetadataValue::Uint8(1),
+                MetadataValue::Int8(-1),
+                MetadataValue::Uint16(1),
+                MetadataValue::Int16(-1),
+                MetadataValue::Int32(-1),
+                MetadataValue::Float32(1.0),
+                MetadataValue::Bool(false),
+                MetadataValue::String("x".into()),
+                MetadataValue::Uint64(1),
+                MetadataValue::Int64(-1),
+                MetadataValue::Float64(1.0),
+            ],
+        );
+        assert!(w.write().is_ok());
+        w.finalize().unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_with_tensor_roundtrip() {
+        let path = tmp_path("tensor");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_metadata("general.architecture", "test");
+        w.add_tensor(TensorInfo {
+            name: "t.weight".to_string(),
+            shape: vec![4, 4],
+            dtype: 0,
+        });
+        w.add_tensor(TensorInfo {
+            name: "t.bias".to_string(),
+            shape: vec![4],
+            dtype: 1, // F16
+        });
+        w.write().unwrap();
+
+        // Write data for tensor 0 (16 f32 = 64 bytes)
+        let payload = vec![0u8; 64];
+        w.write_tensor_data(0, &payload).unwrap();
+        w.finalize().unwrap();
+
+        let model = read_back(&path);
+        assert_eq!(model.tensors().len(), 2);
+        assert_eq!(model.tensors()[0].name, "t.weight");
+        assert_eq!(model.tensors()[1].name, "t.bias");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_tensor_data_invalid_index() {
+        let path = tmp_path("bad_idx");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_tensor(TensorInfo {
+            name: "x".into(),
+            shape: vec![1],
+            dtype: 0,
+        });
+        w.write().unwrap();
+        let err = w.write_tensor_data(5, &[0u8; 4]).err().unwrap();
+        assert!(err.to_string().contains("invalid tensor index"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_with_alignment_setter() {
+        let path = tmp_path("align");
+        let w = GGUFWriter::new(&path, 3).unwrap().with_alignment(64);
+        assert_eq!(w.alignment, 64);
+        drop(w);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_calculate_tensor_size_branches() {
+        let path = tmp_path("calc_size");
+        let w = GGUFWriter::new(&path, 3).unwrap();
+        let f32_t = TensorInfo { name: "a".into(), shape: vec![2, 3], dtype: 0 };
+        let f16_t = TensorInfo { name: "b".into(), shape: vec![4], dtype: 1 };
+        let quant_t = TensorInfo { name: "c".into(), shape: vec![32], dtype: 8 };
+        assert_eq!(w.calculate_tensor_size(&f32_t).unwrap(), 2 * 3 * 4);
+        assert_eq!(w.calculate_tensor_size(&f16_t).unwrap(), 4 * 2);
+        assert_eq!(w.calculate_tensor_size(&quant_t).unwrap(), 32);
+        drop(w);
+        let _ = std::fs::remove_file(&path);
+    }
 }

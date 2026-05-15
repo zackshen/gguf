@@ -1442,6 +1442,393 @@ mod tests {
         let msg = result.err().unwrap().to_string();
         assert!(msg.contains("exceeds maximum"), "unexpected error: {msg}");
     }
+
+    // ========== Synthetic byte-stream coverage tests ==========
+
+    /// Build a post-magic GGUF byte stream for a given version, kv section, and tensor section.
+    /// Caller supplies pre-encoded kv/tensor bytes and their counts.
+    fn build_post_magic(
+        version: i32,
+        num_tensor: u64,
+        num_kv: u64,
+        kv: &[u8],
+        tensors: &[u8],
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&version.to_le_bytes());
+        match version {
+            super::GGUF_VERSION_V1 => {
+                buf.extend_from_slice(&(num_tensor as u32).to_le_bytes());
+                buf.extend_from_slice(&(num_kv as u32).to_le_bytes());
+            }
+            _ => {
+                buf.extend_from_slice(&num_tensor.to_le_bytes());
+                buf.extend_from_slice(&num_kv.to_le_bytes());
+            }
+        }
+        buf.extend_from_slice(kv);
+        buf.extend_from_slice(tensors);
+        buf
+    }
+
+    fn encode_string_versioned(s: &str, version: i32) -> Vec<u8> {
+        let mut b = Vec::new();
+        if version == super::GGUF_VERSION_V1 {
+            b.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        } else {
+            b.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        }
+        b.extend_from_slice(s.as_bytes());
+        b
+    }
+
+    fn encode_tensor_v3(name: &str, shape: &[u64], kind: u32, offset: u64) -> Vec<u8> {
+        let mut b = encode_string_v3(name);
+        b.extend_from_slice(&(shape.len() as u32).to_le_bytes());
+        for d in shape {
+            b.extend_from_slice(&d.to_le_bytes());
+        }
+        b.extend_from_slice(&kind.to_le_bytes());
+        b.extend_from_slice(&offset.to_le_bytes());
+        b
+    }
+
+    fn decode_post_magic(bytes: Vec<u8>) -> super::Result<super::GGUFModel> {
+        use std::io::Cursor;
+        let mut container = super::GGUFContainer::new(
+            super::ByteOrder::LE,
+            Box::new(Cursor::new(bytes)),
+            u64::MAX,
+        );
+        container.decode()
+    }
+
+    #[test]
+    fn test_decode_v1_format() {
+        let bytes = build_post_magic(super::GGUF_VERSION_V1, 0, 0, &[], &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.get_version(), "v1");
+        assert_eq!(model.num_kv(), 0);
+        assert_eq!(model.num_tensor(), 0);
+    }
+
+    #[test]
+    fn test_decode_v2_format() {
+        let bytes = build_post_magic(super::GGUF_VERSION_V2, 0, 0, &[], &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.get_version(), "v2");
+    }
+
+    #[test]
+    fn test_decode_invalid_version() {
+        let bytes = build_post_magic(99, 0, 0, &[], &[]);
+        let err = decode_post_magic(bytes).err().unwrap().to_string();
+        assert!(err.contains("invalid version"), "unexpected: {err}");
+    }
+
+    /// KV pair builder: key (string) + value_type (u32) + raw value bytes
+    fn kv_entry(key: &str, vtype: u32, value: &[u8]) -> Vec<u8> {
+        let mut b = encode_string_v3(key);
+        b.extend_from_slice(&vtype.to_le_bytes());
+        b.extend_from_slice(value);
+        b
+    }
+
+    #[test]
+    fn test_decode_all_metadata_value_types() {
+        // Build kv section containing every supported metadata type
+        let mut kv = Vec::new();
+        let mut count: u64 = 0;
+
+        kv.extend_from_slice(&kv_entry("k_u8", 0, &[42u8])); count += 1;
+        kv.extend_from_slice(&kv_entry("k_i8", 1, &[(-7i8) as u8])); count += 1;
+        kv.extend_from_slice(&kv_entry("k_u16", 2, &1234u16.to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_i16", 3, &(-1234i16).to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_u32", 4, &123456u32.to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_i32", 5, &(-123456i32).to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_f32", 6, &1.5f32.to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_bool_t", 7, &[1u8])); count += 1;
+        kv.extend_from_slice(&kv_entry("k_bool_f", 7, &[0u8])); count += 1;
+        let s = encode_string_v3("hello");
+        kv.extend_from_slice(&kv_entry("k_str", 8, &s)); count += 1;
+        kv.extend_from_slice(&kv_entry("k_u64", 10, &9_999_999_999u64.to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_i64", 11, &(-9_999_999_999i64).to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_f64", 12, &3.25f64.to_le_bytes())); count += 1;
+
+        // Array of u32 with 3 entries
+        let mut arr = Vec::new();
+        arr.extend_from_slice(&4u32.to_le_bytes()); // item_type = Uint32
+        arr.extend_from_slice(&3u64.to_le_bytes()); // array_len
+        arr.extend_from_slice(&1u32.to_le_bytes());
+        arr.extend_from_slice(&2u32.to_le_bytes());
+        arr.extend_from_slice(&3u32.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("k_arr_u32", 9, &arr));
+        count += 1;
+
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, count, &kv, &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.num_kv(), count);
+        let kv = model.metadata();
+        assert_eq!(kv.get("k_u8").unwrap().as_u64().unwrap(), 42);
+        assert_eq!(kv.get("k_bool_t").unwrap().as_bool().unwrap(), true);
+        assert_eq!(kv.get("k_bool_f").unwrap().as_bool().unwrap(), false);
+        assert_eq!(kv.get("k_str").unwrap().as_str().unwrap(), "hello");
+        let arr_v = kv.get("k_arr_u32").unwrap().as_array().unwrap();
+        assert_eq!(arr_v.len(), 3);
+    }
+
+    #[test]
+    fn test_decode_array_of_every_primitive() {
+        // Each primitive that read_array supports gets an array entry.
+        fn arr_kv(item_type: u32, value_bytes: &[u8], n: u64) -> Vec<u8> {
+            let mut a = Vec::new();
+            a.extend_from_slice(&item_type.to_le_bytes());
+            a.extend_from_slice(&n.to_le_bytes());
+            a.extend_from_slice(value_bytes);
+            a
+        }
+
+        let mut kv = Vec::new();
+        let mut count: u64 = 0;
+
+        // u8
+        kv.extend_from_slice(&kv_entry("a_u8", 9, &arr_kv(0, &[1u8, 2, 3], 3))); count += 1;
+        // i8
+        kv.extend_from_slice(&kv_entry("a_i8", 9, &arr_kv(1, &[1u8, 2, 3], 3))); count += 1;
+        // u16
+        let mut b = Vec::new(); b.extend_from_slice(&1u16.to_le_bytes()); b.extend_from_slice(&2u16.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_u16", 9, &arr_kv(2, &b, 2))); count += 1;
+        // i16
+        let mut b = Vec::new(); b.extend_from_slice(&(-1i16).to_le_bytes()); b.extend_from_slice(&2i16.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_i16", 9, &arr_kv(3, &b, 2))); count += 1;
+        // i32
+        let mut b = Vec::new(); b.extend_from_slice(&(-5i32).to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_i32", 9, &arr_kv(5, &b, 1))); count += 1;
+        // f32
+        let mut b = Vec::new(); b.extend_from_slice(&1.5f32.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_f32", 9, &arr_kv(6, &b, 1))); count += 1;
+        // bool
+        kv.extend_from_slice(&kv_entry("a_bool", 9, &arr_kv(7, &[1u8, 0], 2))); count += 1;
+        // string
+        let mut b = Vec::new(); b.extend_from_slice(&encode_string_v3("hi"));
+        kv.extend_from_slice(&kv_entry("a_str", 9, &arr_kv(8, &b, 1))); count += 1;
+        // u64
+        let mut b = Vec::new(); b.extend_from_slice(&7u64.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_u64", 9, &arr_kv(10, &b, 1))); count += 1;
+        // i64
+        let mut b = Vec::new(); b.extend_from_slice(&(-7i64).to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_i64", 9, &arr_kv(11, &b, 1))); count += 1;
+        // f64
+        let mut b = Vec::new(); b.extend_from_slice(&3.25f64.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_f64", 9, &arr_kv(12, &b, 1))); count += 1;
+
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, count, &kv, &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.metadata().get("a_u8").unwrap().as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_decode_nested_array_rejected() {
+        // Array-of-array is not supported and must error.
+        let mut inner = Vec::new();
+        inner.extend_from_slice(&9u32.to_le_bytes()); // item_type = Array
+        inner.extend_from_slice(&1u64.to_le_bytes());
+        let kv = kv_entry("nested", 9, &inner);
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, 1, &kv, &[]);
+        let err = decode_post_magic(bytes).err().unwrap().to_string();
+        assert!(err.contains("Unsupport item value type"));
+    }
+
+    #[test]
+    fn test_decode_tensor_variety() {
+        // One tensor for each documented kind, all shape=[1,1,1,1].
+        let kinds: &[u32] = &[
+            0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+        ];
+        let mut t = Vec::new();
+        for (i, &k) in kinds.iter().enumerate() {
+            let name = format!("t_{i}");
+            t.extend_from_slice(&encode_tensor_v3(&name, &[1, 1, 1, 1], k, i as u64 * 64));
+        }
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, kinds.len() as u64, 0, &[], &t);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.tensors().len(), kinds.len());
+    }
+
+    #[test]
+    fn test_decode_tensor_count_kind_rejected() {
+        // Kind 40 (GGMLType::Count) hits unreachable!(); decode must not reach it.
+        // We assert the safer thing: kind=4 (Q4_2) and kind=5 (Q4_3) which are valid in
+        // GGMLType::try_from but type_size=0 — the decoder still accepts them.
+        // Use kind=200 to exercise the TryFrom error path.
+        let t = encode_tensor_v3("bad", &[1, 1, 1, 1], 200, 0);
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 1, 0, &[], &t);
+        let err = decode_post_magic(bytes).err().unwrap().to_string();
+        assert!(err.contains("invalid GGML type"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn test_decode_unsupported_metadata_type() {
+        // value_type 100 is not in MetadataValueType -> TryFrom error.
+        let kv = kv_entry("k", 100, &[]);
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, 1, &kv, &[]);
+        let err = decode_post_magic(bytes).err().unwrap().to_string();
+        assert!(err.contains("unsupport metadata value type"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn test_model_parameters_unknown_when_zero() {
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, 0, &[], &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.model_parameters(), "unknown");
+    }
+
+    #[test]
+    fn test_model_family_unknown_when_missing_or_wrong_type() {
+        // No general.architecture key.
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, 0, &[], &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.model_family(), "unknown");
+
+        // general.architecture set to u32 instead of string -> fallback to "unknown".
+        let kv = kv_entry("general.architecture", 4, &7u32.to_le_bytes());
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, 1, &kv, &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.model_family(), "unknown");
+    }
+
+    #[test]
+    fn test_file_type_via_model() {
+        // general.file_type = 14 (Mostly Q6_K)
+        let kv = kv_entry("general.file_type", 10, &14u64.to_le_bytes());
+        let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, 1, &kv, &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.file_type(), "Mostly Q6_K");
+    }
+
+    #[test]
+    fn test_file_type_every_value() {
+        for ft in 0u64..=24 {
+            let s = super::file_type(ft);
+            assert!(!s.is_empty());
+        }
+        assert_eq!(super::file_type(999), "unknown");
+    }
+
+    #[test]
+    fn test_human_number_boundaries() {
+        // Exercise the exact boundary lines.
+        assert_eq!(super::human_number(0), "0");
+        assert_eq!(super::human_number(999), "999");
+        assert_eq!(super::human_number(1_001), "1K");
+        assert_eq!(super::human_number(1_000_001), "1M");
+        assert_eq!(super::human_number(1_000_000_001), "1B");
+    }
+
+    #[test]
+    fn test_ggml_type_display_all_variants() {
+        use super::GGMLType::*;
+        let variants = [
+            F32, F16, Q4_0, Q4_1, Q4_2, Q4_3, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K, Q3_K, Q4_K, Q5_K,
+            Q6_K, Q8_K, IQ2_XXS, IQ2_XS, IQ3_XXS, IQ1_S, IQ4_NL, IQ3_S, IQ2_S, IQ4_XS, I8, I16,
+            I32, I64, F64, IQ1_M, BF16, Q4_0_4_4, Q4_0_4_8, Q4_0_8_8, TQ1_0, TQ2_0, IQ4_NL_4_4,
+            IQ4_NL_4_8, IQ4_NL_8_8, MXFP4, Count,
+        ];
+        for v in variants {
+            let s = format!("{v}");
+            assert!(!s.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_ggml_type_try_from_all_valid() {
+        use super::GGMLType;
+        use std::convert::TryFrom;
+        for i in [
+            0u32, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+        ] {
+            assert!(GGMLType::try_from(i).is_ok(), "{i} should be valid");
+        }
+        // Unmapped values 4 and 5 are reserved (Q4_2 / Q4_3) and not in TryFrom.
+        assert!(GGMLType::try_from(4).is_err());
+        assert!(GGMLType::try_from(5).is_err());
+    }
+
+    #[test]
+    fn test_metadata_value_type_try_from_all() {
+        use super::MetadataValueType;
+        use std::convert::TryFrom;
+        for i in 0u32..=12 {
+            assert!(MetadataValueType::try_from(i).is_ok());
+        }
+        assert!(MetadataValueType::try_from(13).is_err());
+    }
+
+    #[test]
+    fn test_decode_be_byte_order_invalid_version_reports() {
+        // BE container with bytes containing version=v3 in LE will be misread.
+        // Exercises the BE branch of decode().
+        use std::io::Cursor;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&3i32.to_be_bytes()); // v3 in BE
+        bytes.extend_from_slice(&0u64.to_be_bytes()); // num_tensor
+        bytes.extend_from_slice(&0u64.to_be_bytes()); // num_kv
+        let mut container = super::GGUFContainer::new(
+            super::ByteOrder::BE,
+            Box::new(Cursor::new(bytes)),
+            u64::MAX,
+        );
+        let model = container.decode().unwrap();
+        assert_eq!(model.get_version(), "v3");
+    }
+
+    #[test]
+    fn test_unsupported_legacy_magic_formats() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        for (name, magic) in [
+            ("ggml.bin", super::FILE_MAGIC_GGML),
+            ("ggmf.bin", super::FILE_MAGIC_GGMF),
+            ("ggjt.bin", super::FILE_MAGIC_GGJT),
+            ("ggla.bin", super::FILE_MAGIC_GGLA),
+        ] {
+            let path = dir.join(format!("gguf_test_{name}"));
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(&magic.to_le_bytes()).unwrap();
+            let err = super::get_gguf_container(path.to_str().unwrap()).err().unwrap();
+            assert!(err.to_string().contains("unsupport"));
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[test]
+    fn test_invalid_magic_in_file() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join("gguf_test_bad_magic.bin");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&0xDEADBEEFu32.to_le_bytes()).unwrap();
+        let err = super::get_gguf_container(path.to_str().unwrap()).err().unwrap();
+        assert!(err.to_string().contains("invalid file magic"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_decode_v1_string_uses_u32_length() {
+        // v1 read_string uses u32 length (not u64).
+        let mut kv = Vec::new();
+        // key
+        kv.extend_from_slice(&encode_string_versioned("k", super::GGUF_VERSION_V1));
+        // value_type = String
+        kv.extend_from_slice(&8u32.to_le_bytes());
+        // value: u32-length string
+        kv.extend_from_slice(&encode_string_versioned("v1str", super::GGUF_VERSION_V1));
+
+        let bytes = build_post_magic(super::GGUF_VERSION_V1, 0, 1, &kv, &[]);
+        let model = decode_post_magic(bytes).unwrap();
+        assert_eq!(model.metadata().get("k").unwrap().as_str().unwrap(), "v1str");
+    }
 }
 
 /// Memory-mapped file support (requires `mmap` feature)

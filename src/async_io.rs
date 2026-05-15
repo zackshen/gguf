@@ -194,4 +194,32 @@ mod tests {
         let result = AsyncGGUF::open("nonexistent.gguf").await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_async_invalid_magic() {
+        use tokio::io::AsyncWriteExt;
+        let path = std::env::temp_dir().join("async_bad_magic.bin");
+        let mut f = tokio::fs::File::create(&path).await.unwrap();
+        f.write_all(&[0xDEu8, 0xAD, 0xBE, 0xEF]).await.unwrap();
+        f.flush().await.unwrap();
+        drop(f);
+        let err = AsyncGGUF::open(&path).await.err().unwrap();
+        assert!(err.to_string().contains("invalid file magic"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_async_with_max_array_size_and_read_gguf_helper() {
+        let container = AsyncGGUF::open("tests/test-le-v3.gguf")
+            .await
+            .unwrap()
+            .with_max_array_size(1);
+        assert_eq!(container.max_array_size, 1);
+
+        let model = read_gguf_with_array_size("tests/test-le-v3.gguf", u64::MAX)
+            .await
+            .unwrap();
+        assert_eq!(model.model_family(), "llama");
+    }
+
 }

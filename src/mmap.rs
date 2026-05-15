@@ -157,4 +157,33 @@ mod tests {
         let result = MmapGGUF::open("nonexistent.gguf");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_mmap_file_too_small() {
+        let path = std::env::temp_dir().join("mmap_too_small.bin");
+        std::fs::write(&path, [0xAAu8, 0xBB]).unwrap();
+        let err = MmapGGUF::open(&path).err().unwrap();
+        assert!(err.to_string().contains("file too small"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_mmap_invalid_magic() {
+        let path = std::env::temp_dir().join("mmap_bad_magic.bin");
+        std::fs::write(&path, [0xDEu8, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, 0x00]).unwrap();
+        let err = MmapGGUF::open(&path).err().unwrap();
+        assert!(err.to_string().contains("invalid file magic"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_mmap_accessors() {
+        let mmap = MmapGGUF::open("tests/test-le-v3.gguf").unwrap();
+        assert!(mmap.len() > 4);
+        assert!(!mmap.is_empty());
+        let slice = mmap.as_slice();
+        assert_eq!(slice.len(), mmap.len());
+        // First 4 bytes should be the GGUF magic
+        assert_eq!(&slice[..4], &(crate::FILE_MAGIC_GGUF_LE as u32).to_le_bytes());
+    }
 }
