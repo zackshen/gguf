@@ -28,7 +28,7 @@
 
 use anyhow::{anyhow, Result};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::AsyncReadExt;
 
 use crate::{ByteOrder, GGUFModel, FILE_MAGIC_GGUF_BE, FILE_MAGIC_GGUF_LE};
 
@@ -221,5 +221,4 @@ mod tests {
             .unwrap();
         assert_eq!(model.model_family(), "llama");
     }
-
 }

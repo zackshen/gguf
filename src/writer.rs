@@ -1,6 +1,8 @@
 //! GGUF file writing support
 //!
-//! This module provides functionality to create and write GGUF files.
+//! This module provides functionality to create and write GGUF files
+//! that conform to the official GGUF specification:
+//! <https://github.com/ggerganov/ggml/blob/master/docs/gguf.md>
 //!
 //! # Example
 //!
@@ -9,25 +11,17 @@
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let mut writer = GGUFWriter::new("output.gguf", 3)?;
-//!
-//!     // Add metadata
 //!     writer.add_metadata("general.architecture", "llama");
 //!     writer.add_metadata_u32("llama.block_count", 12);
 //!
-//!     // Add tensor info
 //!     let tensor = TensorInfo {
 //!         name: "token_embd.weight".to_string(),
 //!         shape: vec![4096, 32000],
-//!         dtype: 0, // F32
+//!         dtype: 0,
 //!     };
 //!     writer.add_tensor(tensor);
-//!
-//!     // Write header and metadata
 //!     writer.write()?;
-//!
-//!     // Finalize the file
 //!     writer.finalize()?;
-//!
 //!     Ok(())
 //! }
 //! ```
@@ -40,6 +34,9 @@ use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::{FILE_MAGIC_GGUF_LE, GGUF_VERSION_V1, GGUF_VERSION_V2, GGUF_VERSION_V3};
+
+/// Default tensor-data alignment, per GGUF spec (must be a multiple of 8).
+pub const DEFAULT_ALIGNMENT: u64 = 32;
 
 /// Metadata value types for writing
 #[derive(Debug, Clone)]
@@ -72,7 +69,8 @@ pub struct TensorInfo {
 
 /// GGUF file writer
 ///
-/// Provides functionality to write GGUF files.
+/// Produces a spec-conformant GGUF file. Tensor offsets in the info section
+/// are computed at `write()` time and properly aligned per `general.alignment`.
 pub struct GGUFWriter {
     writer: BufWriter<File>,
     metadata: BTreeMap<String, MetadataValue>,
@@ -80,6 +78,7 @@ pub struct GGUFWriter {
     version: i32,
     data_start_offset: u64,
     alignment: u64,
+    tensor_offsets: Vec<u64>,
 }
 
 impl GGUFWriter {
@@ -89,10 +88,6 @@ impl GGUFWriter {
     ///
     /// * `path` - Output file path
     /// * `version` - GGUF version (1, 2, or 3)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be created.
     pub fn new<P: AsRef<Path>>(path: P, version: i32) -> Result<Self> {
         let file = File::create(path.as_ref())?;
         let writer = BufWriter::new(file);
@@ -110,234 +105,221 @@ impl GGUFWriter {
             tensors: Vec::new(),
             version: gguf_version,
             data_start_offset: 0,
-            alignment: 32,
+            alignment: DEFAULT_ALIGNMENT,
+            tensor_offsets: Vec::new(),
         })
     }
 
-    /// Set alignment for tensor data
+    /// Set alignment for tensor data. Must be a multiple of 8 per spec.
+    /// The chosen alignment will be recorded in `general.alignment` metadata
+    /// when it differs from [`DEFAULT_ALIGNMENT`].
     pub fn with_alignment(mut self, alignment: u64) -> Self {
         self.alignment = alignment;
         self
     }
 
-    /// Add metadata (string value)
     pub fn add_metadata(&mut self, key: &str, value: &str) {
         self.metadata
             .insert(key.to_string(), MetadataValue::String(value.to_string()));
     }
-
-    /// Add metadata (u32 value)
     pub fn add_metadata_u32(&mut self, key: &str, value: u32) {
         self.metadata
             .insert(key.to_string(), MetadataValue::Uint32(value));
     }
-
-    /// Add metadata (i32 value)
     pub fn add_metadata_i32(&mut self, key: &str, value: i32) {
         self.metadata
             .insert(key.to_string(), MetadataValue::Int32(value));
     }
-
-    /// Add metadata (u64 value)
     pub fn add_metadata_u64(&mut self, key: &str, value: u64) {
         self.metadata
             .insert(key.to_string(), MetadataValue::Uint64(value));
     }
-
-    /// Add metadata (f32 value)
     pub fn add_metadata_f32(&mut self, key: &str, value: f32) {
         self.metadata
             .insert(key.to_string(), MetadataValue::Float32(value));
     }
-
-    /// Add metadata (bool value)
     pub fn add_metadata_bool(&mut self, key: &str, value: bool) {
         self.metadata
             .insert(key.to_string(), MetadataValue::Bool(value));
     }
-
-    /// Add metadata (array value)
     pub fn add_metadata_array(&mut self, key: &str, value: Vec<MetadataValue>) {
         self.metadata
             .insert(key.to_string(), MetadataValue::Array(value));
     }
 
-    /// Add tensor info
     pub fn add_tensor(&mut self, tensor: TensorInfo) {
         self.tensors.push(tensor);
     }
 
-    /// Write the complete GGUF file
-    ///
-    /// This writes the header, metadata, tensor info, and tensor data.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if writing fails.
+    /// Write the complete GGUF file structure (header, metadata, tensor info,
+    /// alignment padding). Reserves enough zeroed space for all tensor data so
+    /// that subsequent [`write_tensor_data`](Self::write_tensor_data) calls
+    /// seek into a pre-sized region.
     pub fn write(&mut self) -> Result<()> {
-        // Write header
+        if self.alignment == 0 || self.alignment % 8 != 0 {
+            return Err(anyhow!("alignment must be a non-zero multiple of 8"));
+        }
+
+        if self.alignment != DEFAULT_ALIGNMENT && !self.metadata.contains_key("general.alignment") {
+            let aligned_u32 = u32::try_from(self.alignment)
+                .map_err(|_| anyhow!("alignment {} too large for u32", self.alignment))?;
+            self.metadata
+                .insert("general.alignment".to_string(), MetadataValue::Uint32(aligned_u32));
+        }
+
+        let mut tensor_offsets = Vec::with_capacity(self.tensors.len());
+        let mut cur: u64 = 0;
+        for t in &self.tensors {
+            tensor_offsets.push(cur);
+            let sz = calculate_tensor_size(t)?;
+            cur = cur
+                .checked_add(sz)
+                .ok_or_else(|| anyhow!("tensor offset overflow"))?;
+            let pad = (self.alignment - (cur % self.alignment)) % self.alignment;
+            cur = cur
+                .checked_add(pad)
+                .ok_or_else(|| anyhow!("tensor offset overflow"))?;
+        }
+        self.tensor_offsets = tensor_offsets;
+        let total_data_bytes = cur;
+
         self.write_header()?;
-
-        // Write metadata
         self.write_metadata_section()?;
-
-        // Write tensor info
         self.write_tensor_info_section()?;
 
-        // Calculate data offset (aligned)
         let current_pos = self.writer.stream_position()?;
         let padding = (self.alignment - (current_pos % self.alignment)) % self.alignment;
         for _ in 0..padding {
             self.writer.write_u8(0)?;
         }
-
         self.data_start_offset = self.writer.stream_position()?;
+
+        for _ in 0..total_data_bytes {
+            self.writer.write_u8(0)?;
+        }
 
         Ok(())
     }
 
-    /// Write tensor data at the appropriate offset
-    ///
-    /// # Arguments
-    ///
-    /// * `tensor_index` - Index of the tensor (as added)
-    /// * `data` - Raw tensor data bytes
+    /// Write tensor data at the tensor's pre-computed offset.
     pub fn write_tensor_data(&mut self, tensor_index: usize, data: &[u8]) -> Result<()> {
         if tensor_index >= self.tensors.len() {
             return Err(anyhow!("invalid tensor index"));
         }
-
-        // Calculate offset for this tensor
-        let mut offset = self.data_start_offset;
-        for i in 0..tensor_index {
-            offset += self.calculate_tensor_size(&self.tensors[i])?;
+        if self.data_start_offset == 0 {
+            return Err(anyhow!("write() must be called before write_tensor_data()"));
         }
-
-        // Seek and write
-        self.writer.seek(SeekFrom::Start(offset))?;
+        let expected = calculate_tensor_size(&self.tensors[tensor_index])?;
+        if (data.len() as u64) > expected {
+            return Err(anyhow!(
+                "tensor data {} bytes exceeds tensor size {} bytes",
+                data.len(),
+                expected
+            ));
+        }
+        let abs = self
+            .data_start_offset
+            .checked_add(self.tensor_offsets[tensor_index])
+            .ok_or_else(|| anyhow!("absolute offset overflow"))?;
+        self.writer.seek(SeekFrom::Start(abs))?;
         self.writer.write_all(data)?;
-
         Ok(())
     }
 
-    /// Finalize the file (flush and sync)
+    /// Flush buffered writes to disk.
     pub fn finalize(&mut self) -> Result<()> {
         self.writer.flush()?;
         Ok(())
     }
 
-    // Private methods
-
     fn write_header(&mut self) -> Result<()> {
-        // Magic
         self.writer.write_i32::<LittleEndian>(FILE_MAGIC_GGUF_LE)?;
-        // Version
         self.writer.write_i32::<LittleEndian>(self.version)?;
-        // Tensor count
         self.write_size(self.tensors.len() as u64)?;
-        // Metadata count
         self.write_size(self.metadata.len() as u64)?;
-
         Ok(())
     }
 
     fn write_metadata_section(&mut self) -> Result<()> {
-        // Clone all items to avoid borrow conflicts
         let items: Vec<(String, MetadataValue)> = self
             .metadata
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         for (key, value) in items {
-            // Write key
             self.write_string(&key)?;
-            // Write value type and value
             self.write_metadata_value(&value)?;
         }
         Ok(())
     }
 
     fn write_metadata_value(&mut self, value: &MetadataValue) -> Result<()> {
+        let type_id = metadata_type_id(value)?;
+        self.writer.write_u32::<LittleEndian>(type_id)?;
         match value {
-            MetadataValue::Uint8(v) => {
-                self.writer.write_u32::<LittleEndian>(0)?; // type
-                self.writer.write_u8(*v)?;
+            MetadataValue::Array(arr) => self.write_array_payload(arr)?,
+            other => self.write_scalar_payload(other)?,
+        }
+        Ok(())
+    }
+
+    fn write_array_payload(&mut self, arr: &[MetadataValue]) -> Result<()> {
+        let item_type: u32 = match arr.first() {
+            Some(v) => metadata_type_id(v)?,
+            None => 0,
+        };
+        if item_type == 9 {
+            return Err(anyhow!("nested arrays are not supported by GGUF"));
+        }
+        self.writer.write_u32::<LittleEndian>(item_type)?;
+        self.write_size(arr.len() as u64)?;
+        for elem in arr {
+            let elem_type = metadata_type_id(elem)?;
+            if elem_type != item_type {
+                return Err(anyhow!(
+                    "array elements must share one type (expected {}, got {})",
+                    item_type,
+                    elem_type
+                ));
             }
-            MetadataValue::Int8(v) => {
-                self.writer.write_u32::<LittleEndian>(1)?;
-                self.writer.write_i8(*v)?;
-            }
-            MetadataValue::Uint16(v) => {
-                self.writer.write_u32::<LittleEndian>(2)?;
-                self.writer.write_u16::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Int16(v) => {
-                self.writer.write_u32::<LittleEndian>(3)?;
-                self.writer.write_i16::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Uint32(v) => {
-                self.writer.write_u32::<LittleEndian>(4)?;
-                self.writer.write_u32::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Int32(v) => {
-                self.writer.write_u32::<LittleEndian>(5)?;
-                self.writer.write_i32::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Float32(v) => {
-                self.writer.write_u32::<LittleEndian>(6)?;
-                self.writer.write_f32::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Bool(v) => {
-                self.writer.write_u32::<LittleEndian>(7)?;
-                self.writer.write_u8(if *v { 1 } else { 0 })?;
-            }
-            MetadataValue::String(v) => {
-                self.writer.write_u32::<LittleEndian>(8)?;
-                self.write_string(v)?;
-            }
-            MetadataValue::Array(arr) => {
-                self.writer.write_u32::<LittleEndian>(9)?;
-                self.write_size(arr.len() as u64)?;
-                // All elements must be same type
-                if !arr.is_empty() {
-                    for elem in arr {
-                        self.write_metadata_value(elem)?;
-                    }
-                }
-            }
-            MetadataValue::Uint64(v) => {
-                self.writer.write_u32::<LittleEndian>(10)?;
-                self.writer.write_u64::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Int64(v) => {
-                self.writer.write_u32::<LittleEndian>(11)?;
-                self.writer.write_i64::<LittleEndian>(*v)?;
-            }
-            MetadataValue::Float64(v) => {
-                self.writer.write_u32::<LittleEndian>(12)?;
-                self.writer.write_f64::<LittleEndian>(*v)?;
+            self.write_scalar_payload(elem)?;
+        }
+        Ok(())
+    }
+
+    fn write_scalar_payload(&mut self, value: &MetadataValue) -> Result<()> {
+        match value {
+            MetadataValue::Uint8(v) => self.writer.write_u8(*v)?,
+            MetadataValue::Int8(v) => self.writer.write_i8(*v)?,
+            MetadataValue::Uint16(v) => self.writer.write_u16::<LittleEndian>(*v)?,
+            MetadataValue::Int16(v) => self.writer.write_i16::<LittleEndian>(*v)?,
+            MetadataValue::Uint32(v) => self.writer.write_u32::<LittleEndian>(*v)?,
+            MetadataValue::Int32(v) => self.writer.write_i32::<LittleEndian>(*v)?,
+            MetadataValue::Float32(v) => self.writer.write_f32::<LittleEndian>(*v)?,
+            MetadataValue::Bool(v) => self.writer.write_u8(if *v { 1 } else { 0 })?,
+            MetadataValue::String(v) => self.write_string(v)?,
+            MetadataValue::Uint64(v) => self.writer.write_u64::<LittleEndian>(*v)?,
+            MetadataValue::Int64(v) => self.writer.write_i64::<LittleEndian>(*v)?,
+            MetadataValue::Float64(v) => self.writer.write_f64::<LittleEndian>(*v)?,
+            MetadataValue::Array(_) => {
+                return Err(anyhow!("nested arrays are not supported by GGUF"))
             }
         }
         Ok(())
     }
 
     fn write_tensor_info_section(&mut self) -> Result<()> {
-        // Clone to avoid borrow conflicts
         let tensors = self.tensors.clone();
-        for tensor in &tensors {
-            // Name
+        let offsets = self.tensor_offsets.clone();
+        for (i, tensor) in tensors.iter().enumerate() {
             self.write_string(&tensor.name)?;
-            // Number of dimensions
             self.writer
                 .write_u32::<LittleEndian>(tensor.shape.len() as u32)?;
-            // Shape
             for dim in &tensor.shape {
                 self.writer.write_u64::<LittleEndian>(*dim)?;
             }
-            // Data type
             self.writer.write_u32::<LittleEndian>(tensor.dtype)?;
-            // Offset (will be filled later)
-            self.writer.write_u64::<LittleEndian>(0)?;
+            self.writer.write_u64::<LittleEndian>(offsets[i])?;
         }
         Ok(())
     }
@@ -352,7 +334,9 @@ impl GGUFWriter {
     fn write_size(&mut self, size: u64) -> Result<()> {
         match self.version {
             GGUF_VERSION_V1 => {
-                self.writer.write_u32::<LittleEndian>(size as u32)?;
+                let v32 = u32::try_from(size)
+                    .map_err(|_| anyhow!("size {} exceeds u32 for v1 GGUF", size))?;
+                self.writer.write_u32::<LittleEndian>(v32)?;
             }
             _ => {
                 self.writer.write_u64::<LittleEndian>(size)?;
@@ -360,76 +344,121 @@ impl GGUFWriter {
         }
         Ok(())
     }
+}
 
-    fn calculate_tensor_size(&self, tensor: &TensorInfo) -> Result<u64> {
-        // Simplified calculation - actual size depends on dtype
-        let elements: u64 = tensor.shape.iter().product();
-        let bytes_per_element = match tensor.dtype {
-            0 => 4, // F32
-            1 => 2, // F16
-            _ => 1, // Default to 1 byte for quantized
-        };
-        Ok(elements * bytes_per_element)
+fn metadata_type_id(v: &MetadataValue) -> Result<u32> {
+    Ok(match v {
+        MetadataValue::Uint8(_) => 0,
+        MetadataValue::Int8(_) => 1,
+        MetadataValue::Uint16(_) => 2,
+        MetadataValue::Int16(_) => 3,
+        MetadataValue::Uint32(_) => 4,
+        MetadataValue::Int32(_) => 5,
+        MetadataValue::Float32(_) => 6,
+        MetadataValue::Bool(_) => 7,
+        MetadataValue::String(_) => 8,
+        MetadataValue::Array(_) => 9,
+        MetadataValue::Uint64(_) => 10,
+        MetadataValue::Int64(_) => 11,
+        MetadataValue::Float64(_) => 12,
+    })
+}
+
+/// Block size + per-block byte size for each GGML type, matching the reader.
+fn block_and_type_size(kind: u32) -> Result<(u64, u64)> {
+    let block_size: u64 = if kind < 2 {
+        1
+    } else if kind < 10 {
+        32
+    } else {
+        256
+    };
+    let type_size: u64 = match kind {
+        0 => 4,
+        1 => 2,
+        2 => 2 + block_size / 2,
+        3 => 2 + 2 + block_size / 2,
+        4 | 5 => return Err(anyhow!("GGML kind {} (Q4_2/Q4_3) is unsupported", kind)),
+        6 => 2 + 4 + block_size / 2,
+        7 => 2 + 2 + 4 + block_size / 2,
+        8 => 2 + block_size,
+        9 => 4 + 4 + block_size,
+        10 => block_size / 16 + block_size / 4 + 2 + 2,
+        11 => block_size / 8 + block_size / 4 + 12 + 2,
+        12 => 2 + 2 + 12 + block_size / 2,
+        13 => 2 + 2 + 12 + block_size / 8 + block_size / 2,
+        14 => block_size / 2 + block_size / 4 + block_size / 16 + 2,
+        15 => 4 + block_size + block_size / 16 * 2,
+        16 => 2 + block_size / 8 * 2,
+        17 => 2 + block_size / 8 * 2 + block_size / 32,
+        18 => 2 + 3 * (block_size / 8),
+        19 => 2 + block_size / 8 + block_size / 16,
+        20 => 2 + 16,
+        21 => 2 + 13 * (block_size / 32) + block_size / 64,
+        22 => 2 + block_size / 4 + block_size / 16,
+        23 => 2 + 2 + block_size / 64 + block_size / 2,
+        24 => 1,
+        25 => 2,
+        26 => 4,
+        27 => 8,
+        28 => 8,
+        29 => block_size / 8 + block_size / 16 + block_size / 32,
+        30 => 2,
+        31 | 32 | 33 => return Err(anyhow!("GGML kind {} (Q4_0_4_*) is unsupported", kind)),
+        34 => 2 + block_size / 64 + (block_size - 4 * block_size / 64) / 5,
+        35 => 2 + block_size / 4,
+        36 | 37 | 38 => return Err(anyhow!("GGML kind {} (IQ4_NL_*) is unsupported", kind)),
+        39 => block_size + 1 + 16,
+        _ => return Err(anyhow!("invalid GGML kind {}", kind)),
+    };
+    Ok((block_size, type_size))
+}
+
+/// Byte size of a tensor's raw data, matching the reader's formula.
+pub fn calculate_tensor_size(tensor: &TensorInfo) -> Result<u64> {
+    let (block_size, type_size) = block_and_type_size(tensor.dtype)?;
+    if block_size == 0 {
+        return Err(anyhow!("zero block_size for GGML kind {}", tensor.dtype));
     }
+    let elements: u64 = tensor.shape.iter().try_fold(1u64, |acc, d| {
+        acc.checked_mul(*d)
+            .ok_or_else(|| anyhow!("element count overflow"))
+    })?;
+    let raw = elements
+        .checked_mul(type_size)
+        .ok_or_else(|| anyhow!("tensor byte size overflow"))?;
+    Ok(raw / block_size)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
-
-    #[test]
-    fn test_writer_create() {
-        let writer = GGUFWriter::new("/tmp/test_output.gguf", 3);
-        assert!(writer.is_ok());
-    }
-
-    #[test]
-    fn test_write_metadata() {
-        let mut writer = GGUFWriter::new("/tmp/test_metadata.gguf", 3).unwrap();
-        writer.add_metadata("general.architecture", "llama");
-        writer.add_metadata_u32("llama.block_count", 12);
-        writer.add_metadata_f32("test.value", 3.14);
-
-        let result = writer.write();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_write_with_tensor() {
-        let mut writer = GGUFWriter::new("/tmp/test_tensor.gguf", 3).unwrap();
-        writer.add_metadata("general.architecture", "test");
-
-        let tensor = TensorInfo {
-            name: "test.weight".to_string(),
-            shape: vec![10, 20],
-            dtype: 0, // F32
-        };
-        writer.add_tensor(tensor);
-
-        let result = writer.write();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_invalid_version() {
-        let result = GGUFWriter::new("/tmp/test_invalid.gguf", 5);
-        assert!(result.is_err());
-    }
 
     fn tmp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("gguf_writer_test_{name}.gguf"))
     }
 
     fn read_back(path: &std::path::Path) -> crate::GGUFModel {
-        let mut c = crate::get_gguf_container_array_size(path.to_str().unwrap(), u64::MAX)
-            .expect("open");
+        let mut c =
+            crate::get_gguf_container_array_size(path.to_str().unwrap(), u64::MAX).expect("open");
         c.decode().expect("decode")
     }
 
     #[test]
-    fn test_writer_v1_v2_roundtrip() {
-        for version in [1, 2] {
+    fn test_writer_create() {
+        let writer = GGUFWriter::new(tmp_path("create"), 3);
+        assert!(writer.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_version() {
+        let result = GGUFWriter::new(tmp_path("badver"), 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_writer_v1_v2_v3_roundtrip() {
+        for version in [1, 2, 3] {
             let path = tmp_path(&format!("v{version}"));
             let mut w = GGUFWriter::new(&path, version).unwrap();
             w.add_metadata("general.architecture", "test");
@@ -453,69 +482,105 @@ mod tests {
         w.add_metadata_u64("k.u64", 1_000_000);
         w.add_metadata_f32("k.f32", 1.25);
         w.add_metadata_bool("k.bool", true);
-
-        // Exercise every leaf MetadataValue variant by inserting directly into the map.
         w.metadata.insert("k.u8".into(), MetadataValue::Uint8(7));
         w.metadata.insert("k.i8".into(), MetadataValue::Int8(-7));
         w.metadata.insert("k.u16".into(), MetadataValue::Uint16(7));
         w.metadata.insert("k.i16".into(), MetadataValue::Int16(-7));
         w.metadata.insert("k.i64".into(), MetadataValue::Int64(-7));
-        w.metadata.insert("k.f64".into(), MetadataValue::Float64(2.5));
-        w.metadata.insert("k.str".into(), MetadataValue::String("hi".into()));
+        w.metadata
+            .insert("k.f64".into(), MetadataValue::Float64(2.5));
+        w.metadata
+            .insert("k.str".into(), MetadataValue::String("hi".into()));
 
         w.write().unwrap();
         w.finalize().unwrap();
 
         let model = read_back(&path);
         let kv = model.metadata();
+        assert_eq!(kv.get("k.u8").unwrap().as_u64().unwrap(), 7);
+        assert_eq!(kv.get("k.i8").unwrap().as_i64().unwrap(), -7);
+        assert_eq!(kv.get("k.u16").unwrap().as_u64().unwrap(), 7);
+        assert_eq!(kv.get("k.i16").unwrap().as_i64().unwrap(), -7);
         assert_eq!(kv.get("k.u32").unwrap().as_u64().unwrap(), 42);
         assert_eq!(kv.get("k.i32").unwrap().as_i64().unwrap(), -42);
+        assert_eq!(kv.get("k.u64").unwrap().as_u64().unwrap(), 1_000_000);
+        assert_eq!(kv.get("k.i64").unwrap().as_i64().unwrap(), -7);
+        assert!((kv.get("k.f32").unwrap().as_f64().unwrap() - 1.25).abs() < 1e-6);
+        assert!((kv.get("k.f64").unwrap().as_f64().unwrap() - 2.5).abs() < 1e-9);
         assert_eq!(kv.get("k.bool").unwrap().as_bool().unwrap(), true);
         assert_eq!(kv.get("k.str").unwrap().as_str().unwrap(), "hi");
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn test_writer_add_metadata_array_writes_without_error() {
-        // The writer's array format is incompatible with the reader (missing item_type
-        // field). This test exercises the array write path only — no round-trip.
-        let path = tmp_path("add_arr");
+    fn test_writer_array_roundtrip() {
+        let path = tmp_path("arr_rt");
         let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_metadata("general.architecture", "x");
         w.add_metadata_array(
-            "k.arr",
-            vec![MetadataValue::Uint32(1), MetadataValue::Uint32(2)],
-        );
-        // Cover every primitive variant of write_metadata_value via array elements.
-        w.add_metadata_array(
-            "k.primitives",
+            "arr.u32",
             vec![
-                MetadataValue::Uint8(1),
-                MetadataValue::Int8(-1),
-                MetadataValue::Uint16(1),
-                MetadataValue::Int16(-1),
-                MetadataValue::Int32(-1),
-                MetadataValue::Float32(1.0),
-                MetadataValue::Bool(false),
-                MetadataValue::String("x".into()),
-                MetadataValue::Uint64(1),
-                MetadataValue::Int64(-1),
-                MetadataValue::Float64(1.0),
+                MetadataValue::Uint32(10),
+                MetadataValue::Uint32(20),
+                MetadataValue::Uint32(30),
             ],
         );
-        assert!(w.write().is_ok());
+        w.add_metadata_array(
+            "arr.str",
+            vec![
+                MetadataValue::String("a".into()),
+                MetadataValue::String("bb".into()),
+                MetadataValue::String("ccc".into()),
+            ],
+        );
+        w.add_metadata_array("arr.empty", vec![]);
+        w.write().unwrap();
         w.finalize().unwrap();
+
+        let model = read_back(&path);
+        let kv = model.metadata();
+        let u32_arr = kv.get("arr.u32").unwrap().as_array().unwrap();
+        assert_eq!(u32_arr.len(), 3);
+        assert_eq!(u32_arr[0].as_u64().unwrap(), 10);
+        assert_eq!(u32_arr[2].as_u64().unwrap(), 30);
+        let str_arr = kv.get("arr.str").unwrap().as_array().unwrap();
+        assert_eq!(str_arr[1].as_str().unwrap(), "bb");
+        assert_eq!(kv.get("arr.empty").unwrap().as_array().unwrap().len(), 0);
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn test_writer_with_tensor_roundtrip() {
-        let path = tmp_path("tensor");
+    fn test_writer_array_mixed_types_error() {
+        let path = tmp_path("arr_mixed");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_metadata_array(
+            "mixed",
+            vec![MetadataValue::Uint32(1), MetadataValue::String("x".into())],
+        );
+        let err = w.write().err().unwrap();
+        assert!(err.to_string().contains("must share one type"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_nested_array_error() {
+        let path = tmp_path("nested");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_metadata_array("nested", vec![MetadataValue::Array(vec![MetadataValue::Uint8(1)])]);
+        let err = w.write().err().unwrap();
+        assert!(err.to_string().contains("nested arrays"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_with_tensors_roundtrip() {
+        let path = tmp_path("tensors_rt");
         let mut w = GGUFWriter::new(&path, 3).unwrap();
         w.add_metadata("general.architecture", "test");
         w.add_tensor(TensorInfo {
             name: "t.weight".to_string(),
             shape: vec![4, 4],
-            dtype: 0,
+            dtype: 0, // F32
         });
         w.add_tensor(TensorInfo {
             name: "t.bias".to_string(),
@@ -524,15 +589,31 @@ mod tests {
         });
         w.write().unwrap();
 
-        // Write data for tensor 0 (16 f32 = 64 bytes)
-        let payload = vec![0u8; 64];
-        w.write_tensor_data(0, &payload).unwrap();
+        let payload0 = (0..16u32)
+            .flat_map(|i| (i as f32).to_le_bytes())
+            .collect::<Vec<u8>>();
+        let payload1 = vec![0xABu8; 4 * 2];
+        w.write_tensor_data(0, &payload0).unwrap();
+        w.write_tensor_data(1, &payload1).unwrap();
         w.finalize().unwrap();
 
         let model = read_back(&path);
-        assert_eq!(model.tensors().len(), 2);
-        assert_eq!(model.tensors()[0].name, "t.weight");
-        assert_eq!(model.tensors()[1].name, "t.bias");
+        let ts = model.tensors();
+        assert_eq!(ts.len(), 2);
+        assert_eq!(ts[0].name, "t.weight");
+        // offsets must be strictly increasing and aligned to default 32
+        assert_eq!(ts[0].offset % DEFAULT_ALIGNMENT, 0);
+        assert_eq!(ts[1].offset % DEFAULT_ALIGNMENT, 0);
+        assert!(ts[1].offset >= ts[0].offset + ts[0].size);
+
+        // Verify written tensor bytes are recoverable via the recorded offset.
+        let raw = std::fs::read(&path).unwrap();
+        let data_start = model.data_offset() as usize;
+        let off0 = data_start + ts[0].offset as usize;
+        assert_eq!(&raw[off0..off0 + payload0.len()], payload0.as_slice());
+        let off1 = data_start + ts[1].offset as usize;
+        assert_eq!(&raw[off1..off1 + payload1.len()], payload1.as_slice());
+
         let _ = std::fs::remove_file(&path);
     }
 
@@ -552,25 +633,162 @@ mod tests {
     }
 
     #[test]
-    fn test_writer_with_alignment_setter() {
-        let path = tmp_path("align");
-        let w = GGUFWriter::new(&path, 3).unwrap().with_alignment(64);
-        assert_eq!(w.alignment, 64);
-        drop(w);
+    fn test_write_tensor_data_before_write_errors() {
+        let path = tmp_path("before_write");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_tensor(TensorInfo {
+            name: "x".into(),
+            shape: vec![1],
+            dtype: 0,
+        });
+        let err = w.write_tensor_data(0, &[0u8; 4]).err().unwrap();
+        assert!(err.to_string().contains("write() must be called"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_tensor_data_too_large_errors() {
+        let path = tmp_path("too_large");
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_tensor(TensorInfo {
+            name: "x".into(),
+            shape: vec![2],
+            dtype: 0, // F32 -> 8 bytes
+        });
+        w.write().unwrap();
+        let err = w.write_tensor_data(0, &[0u8; 16]).err().unwrap();
+        assert!(err.to_string().contains("exceeds tensor size"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_alignment_recorded_when_custom() {
+        let path = tmp_path("align64");
+        let mut w = GGUFWriter::new(&path, 3).unwrap().with_alignment(64);
+        w.add_metadata("general.architecture", "t");
+        w.add_tensor(TensorInfo {
+            name: "t".into(),
+            shape: vec![2],
+            dtype: 0,
+        });
+        w.write().unwrap();
+        w.finalize().unwrap();
+        let model = read_back(&path);
+        // general.alignment auto-inserted at the requested value
+        assert_eq!(
+            model
+                .metadata()
+                .get("general.alignment")
+                .unwrap()
+                .as_u64()
+                .unwrap(),
+            64
+        );
+        assert_eq!(model.tensors()[0].offset % 64, 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_alignment_invalid_rejected() {
+        let path = tmp_path("align_bad");
+        let mut w = GGUFWriter::new(&path, 3).unwrap().with_alignment(7);
+        let err = w.write().err().unwrap();
+        assert!(err.to_string().contains("multiple of 8"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writer_v1_size_overflow_rejected() {
+        let path = tmp_path("v1_big");
+        let mut w = GGUFWriter::new(&path, 1).unwrap();
+        // Build a string longer than u32::MAX bytes is impractical; instead
+        // simulate via metadata count exceeding u32::MAX by mocking the field directly.
+        // We exercise this by triggering the explicit error path with a too-big shape.
+        w.add_tensor(TensorInfo {
+            name: "t".into(),
+            shape: vec![u32::MAX as u64 + 1],
+            dtype: 0,
+        });
+        // calculate_tensor_size will not overflow at this point; the v1 write_size
+        // check fires on the tensor count which is fine — so we hand-test write_size.
+        let res = w.write_size(u32::MAX as u64 + 1);
+        assert!(res.is_err());
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn test_calculate_tensor_size_branches() {
-        let path = tmp_path("calc_size");
-        let w = GGUFWriter::new(&path, 3).unwrap();
-        let f32_t = TensorInfo { name: "a".into(), shape: vec![2, 3], dtype: 0 };
-        let f16_t = TensorInfo { name: "b".into(), shape: vec![4], dtype: 1 };
-        let quant_t = TensorInfo { name: "c".into(), shape: vec![32], dtype: 8 };
-        assert_eq!(w.calculate_tensor_size(&f32_t).unwrap(), 2 * 3 * 4);
-        assert_eq!(w.calculate_tensor_size(&f16_t).unwrap(), 4 * 2);
-        assert_eq!(w.calculate_tensor_size(&quant_t).unwrap(), 32);
-        drop(w);
-        let _ = std::fs::remove_file(&path);
+        // F32: 2*3 elements * 4 bytes / 1 block = 24
+        let f32_t = TensorInfo {
+            name: "a".into(),
+            shape: vec![2, 3],
+            dtype: 0,
+        };
+        assert_eq!(calculate_tensor_size(&f32_t).unwrap(), 24);
+        // F16: 4 * 2 / 1 = 8
+        let f16_t = TensorInfo {
+            name: "b".into(),
+            shape: vec![4],
+            dtype: 1,
+        };
+        assert_eq!(calculate_tensor_size(&f16_t).unwrap(), 8);
+        // Q8_0: block 32, type 34, 32 elems -> 32*34/32 = 34
+        let q8 = TensorInfo {
+            name: "c".into(),
+            shape: vec![32],
+            dtype: 8,
+        };
+        assert_eq!(calculate_tensor_size(&q8).unwrap(), 34);
+        // Q4_K: block 256, type 2+2+12+128=144, 256 elems -> 256*144/256 = 144
+        let q4k = TensorInfo {
+            name: "d".into(),
+            shape: vec![256],
+            dtype: 12,
+        };
+        assert_eq!(calculate_tensor_size(&q4k).unwrap(), 144);
+    }
+
+    #[test]
+    fn test_calculate_tensor_size_unsupported_kind() {
+        let bad = TensorInfo {
+            name: "x".into(),
+            shape: vec![1],
+            dtype: 4,
+        }; // Q4_2
+        assert!(calculate_tensor_size(&bad).is_err());
+        let bad2 = TensorInfo {
+            name: "x".into(),
+            shape: vec![1],
+            dtype: 31,
+        }; // Q4_0_4_4
+        assert!(calculate_tensor_size(&bad2).is_err());
+        let bad3 = TensorInfo {
+            name: "x".into(),
+            shape: vec![1],
+            dtype: 36,
+        }; // IQ4_NL_4_4
+        assert!(calculate_tensor_size(&bad3).is_err());
+        let bad4 = TensorInfo {
+            name: "x".into(),
+            shape: vec![1],
+            dtype: 999,
+        };
+        assert!(calculate_tensor_size(&bad4).is_err());
+    }
+
+    #[test]
+    fn test_calculate_tensor_size_all_supported_kinds() {
+        let supported = [
+            0u32, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 34, 35, 39,
+        ];
+        for k in supported {
+            let t = TensorInfo {
+                name: "t".into(),
+                shape: vec![256],
+                dtype: k,
+            };
+            assert!(calculate_tensor_size(&t).is_ok(), "kind {} should compute a size", k);
+        }
     }
 }

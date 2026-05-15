@@ -210,6 +210,24 @@ pub struct V3 {
     num_kv: u64,
 }
 
+/// Internal reader that counts bytes consumed. Lets the container compute
+/// the absolute file offset of the tensor-data section after parsing.
+struct CountingReader {
+    inner: Box<dyn std::io::Read + 'static>,
+    count: u64,
+}
+
+impl std::io::Read for CountingReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.count = self.count.saturating_add(n as u64);
+        Ok(n)
+    }
+}
+
+/// Default tensor-data alignment per GGUF spec.
+pub const GGUF_DEFAULT_ALIGNMENT: u64 = 32;
+
 /// GGUF file container for reading GGUF binary files.
 ///
 /// The container wraps a reader and provides methods to decode the GGUF file
@@ -219,7 +237,7 @@ pub struct V3 {
 pub struct GGUFContainer {
     bo: ByteOrder,
     version: Version,
-    reader: Box<dyn std::io::Read + 'static>,
+    reader: CountingReader,
     max_array_size: u64,
 }
 
@@ -246,7 +264,10 @@ impl GGUFContainer {
         Self {
             bo,
             version: Version::V1(V1::default()),
-            reader,
+            reader: CountingReader {
+                inner: reader,
+                count: 0,
+            },
             max_array_size,
         }
     }
@@ -339,9 +360,30 @@ impl GGUFContainer {
             max_array_size: self.max_array_size,
             bo: self.bo.clone(),
             version: self.version.clone(),
+            data_offset: 0,
+            alignment: GGUF_DEFAULT_ALIGNMENT,
         };
 
         model.decode(&mut self.reader)?;
+
+        // Honor general.alignment if present; spec defaults to 32.
+        let alignment = model
+            .kv
+            .get("general.alignment")
+            .and_then(|v| v.as_u64())
+            .filter(|a| *a > 0 && a % 8 == 0)
+            .unwrap_or(GGUF_DEFAULT_ALIGNMENT);
+        model.alignment = alignment;
+
+        // 4 bytes were consumed for the magic before the container's reader was created.
+        let pre_pad = 4u64
+            .checked_add(self.reader.count)
+            .ok_or_else(|| anyhow!("header byte counter overflow"))?;
+        let padding = (alignment - (pre_pad % alignment)) % alignment;
+        model.data_offset = pre_pad
+            .checked_add(padding)
+            .ok_or_else(|| anyhow!("data offset overflow"))?;
+
         Ok(model)
     }
 }
@@ -369,11 +411,13 @@ pub struct Tensor {
     pub name: String,
     /// GGML type identifier (see [`GGMLType`] for interpretation)
     pub kind: u32,
-    /// Byte offset in the file where tensor data begins
+    /// Number of dimensions as recorded on disk (`<= GGUF_MAX_DIMS`).
+    pub n_dimensions: u32,
+    /// Byte offset of this tensor's data, relative to [`GGUFModel::data_offset`].
     pub offset: u64,
     /// Size of tensor data in bytes
     pub size: u64,
-    /// Shape dimensions (number of elements in each dimension)
+    /// Shape dimensions (one entry per dimension, length == `n_dimensions`).
     pub shape: Vec<u64>,
 }
 
@@ -402,6 +446,12 @@ pub struct GGUFModel {
     max_array_size: u64,
     bo: ByteOrder,
     version: Version,
+    /// Absolute byte offset in the file where the tensor data section begins.
+    /// Equal to the end of the tensor info section rounded up to `alignment`.
+    data_offset: u64,
+    /// Alignment in bytes for tensor data, parsed from `general.alignment`
+    /// (defaults to [`GGUF_DEFAULT_ALIGNMENT`]).
+    alignment: u64,
 }
 
 /// Metadata value type in GGUF files.
@@ -637,9 +687,12 @@ impl GGUFModel {
                     GGUF_MAX_DIMS
                 ));
             }
+            let mut shape_vec = Vec::with_capacity(dims as usize);
             let mut shape = [1u64; 4];
             for i in 0..dims {
-                shape[i as usize] = self.read_u64(&mut reader)?;
+                let dim = self.read_u64(&mut reader)?;
+                shape[i as usize] = dim;
+                shape_vec.push(dim);
             }
 
             let kind = self.read_u32(&mut reader)?;
@@ -714,9 +767,10 @@ impl GGUFModel {
             self.tensors.push(Tensor {
                 name,
                 kind,
+                n_dimensions: dims,
                 offset,
                 size,
-                shape: shape.to_vec(),
+                shape: shape_vec,
             });
 
             self.parameters = self
@@ -944,6 +998,18 @@ impl GGUFModel {
     pub fn tensors(&self) -> &Vec<Tensor> {
         &self.tensors
     }
+
+    /// Absolute file byte offset where the tensor data section begins.
+    /// Add a tensor's `offset` to this value to locate its data in the file.
+    pub fn data_offset(&self) -> u64 {
+        self.data_offset
+    }
+
+    /// Tensor data alignment in bytes, parsed from `general.alignment`
+    /// (defaulting to [`GGUF_DEFAULT_ALIGNMENT`]).
+    pub fn alignment(&self) -> u64 {
+        self.alignment
+    }
 }
 
 /// Get a `GGUFContainer` from a file, truncating all arrays to length 3.
@@ -1061,6 +1127,32 @@ mod tests {
                 "answer_in_float": 42.0,
                 "tokenizer.ggml.tokens": ["a", "b", "c", "d", "e"],})
         );
+    }
+
+    #[test]
+    fn test_data_offset_honors_general_alignment() {
+        // test-le-v3.gguf sets general.alignment = 64.
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        assert_eq!(model.alignment(), 64);
+        let data_off = model.data_offset();
+        assert!(data_off > 0);
+        assert_eq!(data_off % 64, 0, "data_offset must respect general.alignment");
+    }
+
+    #[test]
+    fn test_tensor_preserves_ndimensions() {
+        let mut container = super::get_gguf_container("tests/test-le-v3.gguf").unwrap();
+        let model = container.decode().unwrap();
+        for t in model.tensors() {
+            assert_eq!(
+                t.shape.len() as u32,
+                t.n_dimensions,
+                "shape length should equal n_dimensions for tensor {}",
+                t.name
+            );
+            assert!(t.n_dimensions > 0 && t.n_dimensions <= super::GGUF_MAX_DIMS);
+        }
     }
 
     #[test]
@@ -1495,11 +1587,8 @@ mod tests {
 
     fn decode_post_magic(bytes: Vec<u8>) -> super::Result<super::GGUFModel> {
         use std::io::Cursor;
-        let mut container = super::GGUFContainer::new(
-            super::ByteOrder::LE,
-            Box::new(Cursor::new(bytes)),
-            u64::MAX,
-        );
+        let mut container =
+            super::GGUFContainer::new(super::ByteOrder::LE, Box::new(Cursor::new(bytes)), u64::MAX);
         container.decode()
     }
 
@@ -1540,20 +1629,33 @@ mod tests {
         let mut kv = Vec::new();
         let mut count: u64 = 0;
 
-        kv.extend_from_slice(&kv_entry("k_u8", 0, &[42u8])); count += 1;
-        kv.extend_from_slice(&kv_entry("k_i8", 1, &[(-7i8) as u8])); count += 1;
-        kv.extend_from_slice(&kv_entry("k_u16", 2, &1234u16.to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_i16", 3, &(-1234i16).to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_u32", 4, &123456u32.to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_i32", 5, &(-123456i32).to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_f32", 6, &1.5f32.to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_bool_t", 7, &[1u8])); count += 1;
-        kv.extend_from_slice(&kv_entry("k_bool_f", 7, &[0u8])); count += 1;
+        kv.extend_from_slice(&kv_entry("k_u8", 0, &[42u8]));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_i8", 1, &[(-7i8) as u8]));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_u16", 2, &1234u16.to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_i16", 3, &(-1234i16).to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_u32", 4, &123456u32.to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_i32", 5, &(-123456i32).to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_f32", 6, &1.5f32.to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_bool_t", 7, &[1u8]));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_bool_f", 7, &[0u8]));
+        count += 1;
         let s = encode_string_v3("hello");
-        kv.extend_from_slice(&kv_entry("k_str", 8, &s)); count += 1;
-        kv.extend_from_slice(&kv_entry("k_u64", 10, &9_999_999_999u64.to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_i64", 11, &(-9_999_999_999i64).to_le_bytes())); count += 1;
-        kv.extend_from_slice(&kv_entry("k_f64", 12, &3.25f64.to_le_bytes())); count += 1;
+        kv.extend_from_slice(&kv_entry("k_str", 8, &s));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_u64", 10, &9_999_999_999u64.to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_i64", 11, &(-9_999_999_999i64).to_le_bytes()));
+        count += 1;
+        kv.extend_from_slice(&kv_entry("k_f64", 12, &3.25f64.to_le_bytes()));
+        count += 1;
 
         // Array of u32 with 3 entries
         let mut arr = Vec::new();
@@ -1592,39 +1694,69 @@ mod tests {
         let mut count: u64 = 0;
 
         // u8
-        kv.extend_from_slice(&kv_entry("a_u8", 9, &arr_kv(0, &[1u8, 2, 3], 3))); count += 1;
+        kv.extend_from_slice(&kv_entry("a_u8", 9, &arr_kv(0, &[1u8, 2, 3], 3)));
+        count += 1;
         // i8
-        kv.extend_from_slice(&kv_entry("a_i8", 9, &arr_kv(1, &[1u8, 2, 3], 3))); count += 1;
+        kv.extend_from_slice(&kv_entry("a_i8", 9, &arr_kv(1, &[1u8, 2, 3], 3)));
+        count += 1;
         // u16
-        let mut b = Vec::new(); b.extend_from_slice(&1u16.to_le_bytes()); b.extend_from_slice(&2u16.to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_u16", 9, &arr_kv(2, &b, 2))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_u16", 9, &arr_kv(2, &b, 2)));
+        count += 1;
         // i16
-        let mut b = Vec::new(); b.extend_from_slice(&(-1i16).to_le_bytes()); b.extend_from_slice(&2i16.to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_i16", 9, &arr_kv(3, &b, 2))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&(-1i16).to_le_bytes());
+        b.extend_from_slice(&2i16.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_i16", 9, &arr_kv(3, &b, 2)));
+        count += 1;
         // i32
-        let mut b = Vec::new(); b.extend_from_slice(&(-5i32).to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_i32", 9, &arr_kv(5, &b, 1))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&(-5i32).to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_i32", 9, &arr_kv(5, &b, 1)));
+        count += 1;
         // f32
-        let mut b = Vec::new(); b.extend_from_slice(&1.5f32.to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_f32", 9, &arr_kv(6, &b, 1))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&1.5f32.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_f32", 9, &arr_kv(6, &b, 1)));
+        count += 1;
         // bool
-        kv.extend_from_slice(&kv_entry("a_bool", 9, &arr_kv(7, &[1u8, 0], 2))); count += 1;
+        kv.extend_from_slice(&kv_entry("a_bool", 9, &arr_kv(7, &[1u8, 0], 2)));
+        count += 1;
         // string
-        let mut b = Vec::new(); b.extend_from_slice(&encode_string_v3("hi"));
-        kv.extend_from_slice(&kv_entry("a_str", 9, &arr_kv(8, &b, 1))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&encode_string_v3("hi"));
+        kv.extend_from_slice(&kv_entry("a_str", 9, &arr_kv(8, &b, 1)));
+        count += 1;
         // u64
-        let mut b = Vec::new(); b.extend_from_slice(&7u64.to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_u64", 9, &arr_kv(10, &b, 1))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&7u64.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_u64", 9, &arr_kv(10, &b, 1)));
+        count += 1;
         // i64
-        let mut b = Vec::new(); b.extend_from_slice(&(-7i64).to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_i64", 9, &arr_kv(11, &b, 1))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&(-7i64).to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_i64", 9, &arr_kv(11, &b, 1)));
+        count += 1;
         // f64
-        let mut b = Vec::new(); b.extend_from_slice(&3.25f64.to_le_bytes());
-        kv.extend_from_slice(&kv_entry("a_f64", 9, &arr_kv(12, &b, 1))); count += 1;
+        let mut b = Vec::new();
+        b.extend_from_slice(&3.25f64.to_le_bytes());
+        kv.extend_from_slice(&kv_entry("a_f64", 9, &arr_kv(12, &b, 1)));
+        count += 1;
 
         let bytes = build_post_magic(super::GGUF_VERSION_V3, 0, count, &kv, &[]);
         let model = decode_post_magic(bytes).unwrap();
-        assert_eq!(model.metadata().get("a_u8").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(
+            model
+                .metadata()
+                .get("a_u8")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -1643,8 +1775,8 @@ mod tests {
     fn test_decode_tensor_variety() {
         // One tensor for each documented kind, all shape=[1,1,1,1].
         let kinds: &[u32] = &[
-            0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+            0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+            26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
         ];
         let mut t = Vec::new();
         for (i, &k) in kinds.iter().enumerate() {
@@ -1730,10 +1862,10 @@ mod tests {
     fn test_ggml_type_display_all_variants() {
         use super::GGMLType::*;
         let variants = [
-            F32, F16, Q4_0, Q4_1, Q4_2, Q4_3, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K, Q3_K, Q4_K, Q5_K,
-            Q6_K, Q8_K, IQ2_XXS, IQ2_XS, IQ3_XXS, IQ1_S, IQ4_NL, IQ3_S, IQ2_S, IQ4_XS, I8, I16,
-            I32, I64, F64, IQ1_M, BF16, Q4_0_4_4, Q4_0_4_8, Q4_0_8_8, TQ1_0, TQ2_0, IQ4_NL_4_4,
-            IQ4_NL_4_8, IQ4_NL_8_8, MXFP4, Count,
+            F32, F16, Q4_0, Q4_1, Q4_2, Q4_3, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K,
+            Q8_K, IQ2_XXS, IQ2_XS, IQ3_XXS, IQ1_S, IQ4_NL, IQ3_S, IQ2_S, IQ4_XS, I8, I16, I32, I64,
+            F64, IQ1_M, BF16, Q4_0_4_4, Q4_0_4_8, Q4_0_8_8, TQ1_0, TQ2_0, IQ4_NL_4_4, IQ4_NL_4_8,
+            IQ4_NL_8_8, MXFP4, Count,
         ];
         for v in variants {
             let s = format!("{v}");
@@ -1775,11 +1907,8 @@ mod tests {
         bytes.extend_from_slice(&3i32.to_be_bytes()); // v3 in BE
         bytes.extend_from_slice(&0u64.to_be_bytes()); // num_tensor
         bytes.extend_from_slice(&0u64.to_be_bytes()); // num_kv
-        let mut container = super::GGUFContainer::new(
-            super::ByteOrder::BE,
-            Box::new(Cursor::new(bytes)),
-            u64::MAX,
-        );
+        let mut container =
+            super::GGUFContainer::new(super::ByteOrder::BE, Box::new(Cursor::new(bytes)), u64::MAX);
         let model = container.decode().unwrap();
         assert_eq!(model.get_version(), "v3");
     }
@@ -1797,7 +1926,9 @@ mod tests {
             let path = dir.join(format!("gguf_test_{name}"));
             let mut f = std::fs::File::create(&path).unwrap();
             f.write_all(&magic.to_le_bytes()).unwrap();
-            let err = super::get_gguf_container(path.to_str().unwrap()).err().unwrap();
+            let err = super::get_gguf_container(path.to_str().unwrap())
+                .err()
+                .unwrap();
             assert!(err.to_string().contains("unsupport"));
             let _ = std::fs::remove_file(&path);
         }
@@ -1809,7 +1940,9 @@ mod tests {
         let path = std::env::temp_dir().join("gguf_test_bad_magic.bin");
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(&0xDEADBEEFu32.to_le_bytes()).unwrap();
-        let err = super::get_gguf_container(path.to_str().unwrap()).err().unwrap();
+        let err = super::get_gguf_container(path.to_str().unwrap())
+            .err()
+            .unwrap();
         assert!(err.to_string().contains("invalid file magic"));
         let _ = std::fs::remove_file(&path);
     }
