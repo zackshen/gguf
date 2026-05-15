@@ -120,6 +120,11 @@ pub const GGUF_VERSION_V1: i32 = 0x00000001;
 pub const GGUF_VERSION_V2: i32 = 0x00000002;
 pub const GGUF_VERSION_V3: i32 = 0x00000003;
 
+/// Maximum number of tensor dimensions supported by GGUF, matching `GGML_MAX_DIMS`.
+pub const GGUF_MAX_DIMS: u32 = 4;
+/// Maximum allowed string length in bytes (1 GiB), matching llama.cpp's `GGUF_MAX_STRING_LENGTH`.
+pub const GGUF_MAX_STRING_LENGTH: u64 = 1 << 30;
+
 const THOUSAND: u64 = 1000;
 const MILLION: u64 = 1_000_000;
 const BILLION: u64 = 1_000_000_000;
@@ -624,7 +629,15 @@ impl GGUFModel {
         for _ in 0..self.num_tensor() {
             let name = self.read_string(&mut reader)?;
             let dims = self.read_u32(&mut reader)?;
-            let mut shape = [1; 4];
+            if dims > GGUF_MAX_DIMS {
+                return Err(anyhow!(
+                    "tensor '{}' has {} dimensions, exceeds maximum of {}",
+                    name,
+                    dims,
+                    GGUF_MAX_DIMS
+                ));
+            }
+            let mut shape = [1u64; 4];
             for i in 0..dims {
                 shape[i as usize] = self.read_u64(&mut reader)?;
             }
@@ -681,8 +694,22 @@ impl GGUFModel {
                 GGMLType::Count => unreachable!("GGMLType::Count is not a real data format"),
             };
 
-            let parameters = shape[0] * shape[1] * shape[2] * shape[3];
-            let size = parameters * type_size / block_size;
+            let parameters = shape[0]
+                .checked_mul(shape[1])
+                .and_then(|v| v.checked_mul(shape[2]))
+                .and_then(|v| v.checked_mul(shape[3]))
+                .ok_or_else(|| {
+                    anyhow!("tensor '{}' parameter count overflows u64: shape={:?}", name, shape)
+                })?;
+            if block_size == 0 {
+                return Err(anyhow!("tensor '{}' has zero block_size for kind {}", name, kind));
+            }
+            let size = parameters
+                .checked_mul(type_size)
+                .map(|v| v / block_size)
+                .ok_or_else(|| {
+                    anyhow!("tensor '{}' byte size overflows u64: shape={:?}", name, shape)
+                })?;
 
             self.tensors.push(Tensor {
                 name,
@@ -692,7 +719,10 @@ impl GGUFModel {
                 shape: shape.to_vec(),
             });
 
-            self.parameters += parameters;
+            self.parameters = self
+                .parameters
+                .checked_add(parameters)
+                .ok_or_else(|| anyhow!("total parameter count overflows u64"))?;
         }
 
         Ok(())
@@ -768,7 +798,16 @@ impl GGUFModel {
 
     fn read_string(&self, mut reader: impl std::io::Read) -> Result<String> {
         let name_len = self.read_version_size(&mut reader)?;
-        let mut buffer = vec![0; name_len as usize];
+        if name_len > GGUF_MAX_STRING_LENGTH {
+            return Err(anyhow!(
+                "string length {} exceeds maximum of {} bytes",
+                name_len,
+                GGUF_MAX_STRING_LENGTH
+            ));
+        }
+        let len_usize = usize::try_from(name_len)
+            .map_err(|_| anyhow!("string length {} does not fit in usize", name_len))?;
+        let mut buffer = vec![0; len_usize];
         reader.read_exact(&mut buffer)?;
         Ok(String::from_utf8_lossy(&buffer).to_string())
     }
@@ -1315,6 +1354,93 @@ mod tests {
                 assert!(arr.len() <= 1, "Array should be truncated to max size");
             }
         }
+    }
+
+    // ========== Regression tests for issue #15 (CWE-190, CWE-129) ==========
+
+    /// Build a minimal LE v3 GGUF byte stream (post-magic) with a single tensor.
+    fn build_v3_tensor_bytes(tensor: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        // version v3
+        buf.extend_from_slice(&3i32.to_le_bytes());
+        // num_tensor = 1
+        buf.extend_from_slice(&1u64.to_le_bytes());
+        // num_kv = 0
+        buf.extend_from_slice(&0u64.to_le_bytes());
+        buf.extend_from_slice(tensor);
+        buf
+    }
+
+    fn encode_string_v3(s: &str) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        b.extend_from_slice(s.as_bytes());
+        b
+    }
+
+    #[test]
+    fn test_oob_tensor_dims_returns_error() {
+        // CWE-129: dims > GGUF_MAX_DIMS must not panic with index-out-of-bounds.
+        use std::io::Cursor;
+        let mut tensor = encode_string_v3("oob");
+        tensor.extend_from_slice(&5u32.to_le_bytes()); // dims = 5 (>4)
+                                                       // Five u64 shape entries (would have panicked previously on i==4)
+        for _ in 0..5 {
+            tensor.extend_from_slice(&1u64.to_le_bytes());
+        }
+        tensor.extend_from_slice(&0u32.to_le_bytes()); // kind = F32
+        tensor.extend_from_slice(&0u64.to_le_bytes()); // offset
+
+        let bytes = build_v3_tensor_bytes(&tensor);
+        let mut container =
+            super::GGUFContainer::new(super::ByteOrder::LE, Box::new(Cursor::new(bytes)), u64::MAX);
+        let result = container.decode();
+        assert!(result.is_err(), "decode must reject dims > 4");
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("dimensions") && msg.contains("exceeds maximum"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_integer_overflow_in_tensor_size_returns_error() {
+        // CWE-190: shape[0] * shape[1] overflows u64 and must be rejected.
+        use std::io::Cursor;
+        let mut tensor = encode_string_v3("ovf");
+        tensor.extend_from_slice(&4u32.to_le_bytes()); // dims = 4
+        tensor.extend_from_slice(&u64::MAX.to_le_bytes());
+        tensor.extend_from_slice(&2u64.to_le_bytes());
+        tensor.extend_from_slice(&1u64.to_le_bytes());
+        tensor.extend_from_slice(&1u64.to_le_bytes());
+        tensor.extend_from_slice(&0u32.to_le_bytes()); // kind = F32
+        tensor.extend_from_slice(&0u64.to_le_bytes()); // offset
+
+        let bytes = build_v3_tensor_bytes(&tensor);
+        let mut container =
+            super::GGUFContainer::new(super::ByteOrder::LE, Box::new(Cursor::new(bytes)), u64::MAX);
+        let result = container.decode();
+        assert!(result.is_err(), "decode must reject overflowing shape");
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("overflows"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn test_unbounded_string_length_returns_error() {
+        // CWE-789-ish: declared string length must be capped before allocation.
+        use std::io::Cursor;
+        // tensor name claims a length larger than GGUF_MAX_STRING_LENGTH.
+        let mut tensor = Vec::new();
+        tensor.extend_from_slice(&(super::GGUF_MAX_STRING_LENGTH + 1).to_le_bytes());
+        // No string bytes are actually present — the length check must fire first.
+
+        let bytes = build_v3_tensor_bytes(&tensor);
+        let mut container =
+            super::GGUFContainer::new(super::ByteOrder::LE, Box::new(Cursor::new(bytes)), u64::MAX);
+        let result = container.decode();
+        assert!(result.is_err(), "decode must reject huge string lengths");
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("exceeds maximum"), "unexpected error: {msg}");
     }
 }
 
