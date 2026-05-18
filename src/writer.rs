@@ -156,7 +156,7 @@ impl GGUFWriter {
     /// that subsequent [`write_tensor_data`](Self::write_tensor_data) calls
     /// seek into a pre-sized region.
     pub fn write(&mut self) -> Result<()> {
-        if self.alignment == 0 || self.alignment % 8 != 0 {
+        if self.alignment == 0 || !self.alignment.is_multiple_of(8) {
             return Err(anyhow!("alignment must be a non-zero multiple of 8"));
         }
 
@@ -404,10 +404,10 @@ fn block_and_type_size(kind: u32) -> Result<(u64, u64)> {
         28 => 8,
         29 => block_size / 8 + block_size / 16 + block_size / 32,
         30 => 2,
-        31 | 32 | 33 => return Err(anyhow!("GGML kind {} (Q4_0_4_*) is unsupported", kind)),
+        31..=33 => return Err(anyhow!("GGML kind {} (Q4_0_4_*) is unsupported", kind)),
         34 => 2 + block_size / 64 + (block_size - 4 * block_size / 64) / 5,
         35 => 2 + block_size / 4,
-        36 | 37 | 38 => return Err(anyhow!("GGML kind {} (IQ4_NL_*) is unsupported", kind)),
+        36..=38 => return Err(anyhow!("GGML kind {} (IQ4_NL_*) is unsupported", kind)),
         39 => block_size + 1 + 16,
         _ => return Err(anyhow!("invalid GGML kind {}", kind)),
     };
