@@ -1,6 +1,6 @@
 [package]
 name = "gguf-rs"
-version = "0.1.7"
+version = "0.1.8"
 description = "GGUF file parser"
 edition = "2021"
 license = "MIT"

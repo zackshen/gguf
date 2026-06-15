@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-06-15
+
+### Features
+
+- Add GGUF file writing support (`writer` module)
+- Add async I/O support behind the `async` feature
+- Add memory-mapped reading behind the `mmap` feature
+- Add parsing benchmarks
+
+### Bug Fixes
+
+- Read full `head_count_kv` array for heterogeneous-layer models such as Gemma 4; the array cap is now applied only to `tokenizer.*` metadata (#21)
+- Align GGUF reader/writer with the official spec
+- Validate tensor dimensions, guard against shape overflow, and bound string lengths (#15)
+
+### Testing
+
+- Raise test coverage from 64.94% to 97.23%
+
+### Dependencies
+
+- Bump `log` from 0.4.30 to 0.4.32
+- Bump CI actions (codecov, upload-artifact, checkout, cache, action-gh-release)
+
 ## [0.1.7] - 2026-02-16
 
 ### Security
