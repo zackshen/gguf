@@ -663,7 +663,7 @@ impl GGUFModel {
                 MetadataValueType::Float32 => Value::from(self.read_f32(&mut reader)?),
                 MetadataValueType::Bool => Value::from(self.read_bool(&mut reader)?),
                 MetadataValueType::String => Value::from(self.read_string(&mut reader)?),
-                MetadataValueType::Array => Value::from(self.read_array(&mut reader)?),
+                MetadataValueType::Array => Value::from(self.read_array(&key, &mut reader)?),
                 MetadataValueType::Uint64 => Value::from(self.read_u64(&mut reader)?),
                 MetadataValueType::Int64 => Value::from(self.read_i64(&mut reader)?),
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)?),
@@ -866,11 +866,21 @@ impl GGUFModel {
         Ok(String::from_utf8_lossy(&buffer).to_string())
     }
 
-    fn read_array(&self, mut reader: impl std::io::Read) -> Result<Vec<Value>> {
+    fn read_array(&self, key: &str, mut reader: impl std::io::Read) -> Result<Vec<Value>> {
         let mut data = Vec::new();
         let item_type: MetadataValueType = self.read_u32(&mut reader)?.try_into()?;
         let array_len = self.read_version_size(&mut reader)?;
-        let read_count: usize = u64::min(array_len, self.max_array_size) as usize;
+        // The `max_array_size` cap exists to avoid materializing huge tokenizer
+        // vocabularies (`tokenizer.ggml.tokens`/`scores`/`token_type`/`merges`).
+        // Model-configuration arrays such as `<arch>.attention.head_count_kv`
+        // are per-layer and small; truncating them silently corrupts the value,
+        // so they are always read in full. This matters for heterogeneous-layer
+        // models like Gemma 4. See https://github.com/zackshen/gguf/issues/21
+        let read_count: usize = if key.starts_with("tokenizer.") {
+            u64::min(array_len, self.max_array_size) as usize
+        } else {
+            array_len as usize
+        };
         for _ in 0..array_len {
             let value = match item_type {
                 MetadataValueType::Uint8 => Value::from(self.read_u8(&mut reader)?),
@@ -887,7 +897,7 @@ impl GGUFModel {
                 MetadataValueType::Float64 => Value::from(self.read_f64(&mut reader)?),
                 _ => return Err(anyhow!("Unsupport item value type: Array")),
             };
-            if read_count > 0 && data.len() < read_count {
+            if data.len() < read_count {
                 data.push(value);
             }
         }
@@ -1012,7 +1022,11 @@ impl GGUFModel {
     }
 }
 
-/// Get a `GGUFContainer` from a file, truncating all arrays to length 3.
+/// Get a `GGUFContainer` from a file, truncating tokenizer arrays to length 3.
+///
+/// Only large `tokenizer.*` arrays (vocabularies, scores, merges) are capped;
+/// model-configuration arrays such as `<arch>.attention.head_count_kv` are
+/// always read in full.
 ///
 /// # Errors
 ///
@@ -1127,6 +1141,59 @@ mod tests {
                 "answer_in_float": 42.0,
                 "tokenizer.ggml.tokens": ["a", "b", "c", "d", "e"],})
         );
+    }
+
+    /// Regression test for https://github.com/zackshen/gguf/issues/21
+    ///
+    /// Heterogeneous-layer models (e.g. Gemma 4) store per-layer values such as
+    /// `<arch>.attention.head_count_kv` as a full-length array. The default
+    /// container truncates large *tokenizer* arrays for readability, but must
+    /// preserve model-configuration arrays in full so the KV head counts can be
+    /// read correctly.
+    #[test]
+    fn test_config_array_not_truncated_by_default() {
+        use crate::writer::{GGUFWriter, MetadataValue};
+
+        let path = std::env::temp_dir().join("gguf_issue21_head_count_kv.gguf");
+
+        // Gemma 4 12B head_count_kv: 48 per-layer entries.
+        let head_count_kv: Vec<i32> = (0..48).map(|i| if i % 6 == 5 { 1 } else { 8 }).collect();
+        let head_count_kv_values: Vec<MetadataValue> =
+            head_count_kv.iter().map(|v| MetadataValue::Int32(*v)).collect();
+        // A large tokenizer array that should still be truncated.
+        let tokens: Vec<MetadataValue> =
+            (0..50).map(|i| MetadataValue::String(format!("tok{i}"))).collect();
+
+        let mut w = GGUFWriter::new(&path, 3).unwrap();
+        w.add_metadata("general.architecture", "gemma4");
+        w.add_metadata_array("gemma4.attention.head_count_kv", head_count_kv_values);
+        w.add_metadata_array("tokenizer.ggml.tokens", tokens);
+        w.write().unwrap();
+        w.finalize().unwrap();
+
+        // Default container caps arrays at length 3.
+        let mut container = super::get_gguf_container(path.to_str().unwrap()).unwrap();
+        let model = container.decode().unwrap();
+
+        let kv_arr = model
+            .metadata()
+            .get("gemma4.attention.head_count_kv")
+            .and_then(|v| v.as_array())
+            .expect("head_count_kv should be an array");
+        assert_eq!(kv_arr.len(), 48, "config array must be read in full");
+        let read_back: Vec<i64> = kv_arr.iter().map(|v| v.as_i64().unwrap()).collect();
+        let expected: Vec<i64> = head_count_kv.iter().map(|v| *v as i64).collect();
+        assert_eq!(read_back, expected);
+
+        // Tokenizer arrays are still truncated to the configured cap.
+        let tokens_arr = model
+            .metadata()
+            .get("tokenizer.ggml.tokens")
+            .and_then(|v| v.as_array())
+            .expect("tokens should be an array");
+        assert_eq!(tokens_arr.len(), 3, "tokenizer arrays remain capped");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
