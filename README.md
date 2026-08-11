@@ -1,3 +1,5 @@
+
+
 # GGUF-RS
 
 [![Crates.io](https://img.shields.io/crates/v/gguf-rs.svg)](https://crates.io/crates/gguf-rs)
@@ -182,10 +184,9 @@ use gguf_rs::mmap::MmapGGUF;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mmap = MmapGGUF::open("large_model.gguf")?;
-    let model = mmap.decode()?;
     
-    println!("Architecture: {}", model.model_family());
-    println!("Tensors: {}", model.num_tensor());
+    println!("Architecture: {}", mmap.model_family());
+    println!("Tensors: {}", mmap.num_tensor());
     
     Ok(())
 }
